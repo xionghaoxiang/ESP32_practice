@@ -42,7 +42,7 @@ String sendToTTS(String InputText, int *len) {
   http.addHeader("Content-Type", "application/x-www-form-urlencoded"); // 根据API要求添加HTTP头  application/x-www-form-urlencoded
   
   String payload = String("tex=")+InputText.c_str()+String("&tok=")+tts_token.c_str()+String("&cuid=")+TTS_CUID+String("&ctp=1&lan=zh&spd=5&pit=5&vol=1&per=5&aue=4");  
-  Serial.println(payload);  
+  //Serial.println(payload);  
   
   String outputText;
   int httpCode = http.POST(payload); // 发送POST请求  

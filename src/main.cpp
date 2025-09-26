@@ -52,12 +52,21 @@ void loop() {
           String answer = getQwenAnswer(recognizedText);  // 调用通义千问
           Serial.println("Qwen answer: " + answer);  // 修改为通义千问
           
+
           // 将通义千问的回答转换为语音
           if (answer.length() > 0 && answer != "<error>") {
             Serial.println("Converting answer to speech...");
             int audioLen = 0;
             String audioData = sendToTTS(answer, &audioLen);
             Serial.println("TTS conversion completed");
+            if (audioLen > 0) {
+              // 播放合成的音频
+              size_t bytes_written = 0;
+              esp_err_t writeResult = i2s_write(I2S_NUM_1, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
+              Serial.printf("Wrote %d bytes to I2S for playback\n", bytes_written);
+            } else {
+              Serial.println("No audio data received from TTS");
+            }
           }
         } else {
           Serial.println("No valid text recognized, skipping Qwen call");  // 修改为通义千问

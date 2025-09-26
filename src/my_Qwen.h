@@ -42,13 +42,13 @@ String getQwenAnswer(String inputText) {
   
   // 构建请求参数
   String payload = "{\"model\": \"qwen-turbo\", \"input\": {\"messages\": [{\"role\": \"user\", \"content\": \"" + inputText + "，请用200字以内回答。\"}]}, \"parameters\": {\"max_tokens\": 1500}}";
-  Serial.println("发送至通义千问: " + payload);
+  
   
   int httpResponseCode = http.POST(payload);
   if (httpResponseCode == 200) {
     String response = http.getString();
     http.end();
-    Serial.println("通义千问响应: " + response);
+    
 
     // 解析JSON响应
     DynamicJsonDocument jsonDoc(2048);

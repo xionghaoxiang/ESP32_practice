@@ -28,7 +28,7 @@ String stt_gainToken() {
  
   if (httpCode > 0) {
     String payload = stt_http.getString();
-    Serial.println("STT Token response: " + payload); // 添加调试信息
+    //Serial.println("STT Token response: " + payload); // 添加调试信息
     DynamicJsonDocument doc(1024);
     deserializeJson(doc, payload);
     
