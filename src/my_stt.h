@@ -4,28 +4,31 @@
 #include "HTTPClient.h"
 #include "cJSON.h"
 #include <ArduinoJson.h>
- 
+
 // 1、修改百度语言技术的用户信息：https://console.bce.baidu.com/ai/?fromai=1#/ai/speech/app/list
 const int STT_DEV_PID = 1537; //选填，输入法模型 1737-英语 1537-普通话(近场识别模型) 1936-普通话远程识别 1837-四川话 
 const char *STT_CUID = "8C:BF:EA:1A:F2:B8"; //用户唯一标识，用来区分用户，计算UV值。建议填写能区分用户的机器 MAC 地址或 IMEI 码，长度为60字符以内。
 const char *STT_CLIENT_ID = "xenO6P1P2HqUKjq0MNbEP3LX"; //API Key
 const char *STT_CLIENT_SECRET = "9UW81Yiregz4HG1YtyN0Be2AkkNKA3VT"; //Secret Key
- 
+
 String stt_token;
- 
+
 const int adc_data_len = 1024*16*2;
 const int data_json_len = adc_data_len * 2 * 1.4;
 uint16_t adc_data[adc_data_len];
 char data_json[data_json_len];
- 
+
+// 使用静态HTTPClient对象以减少内存分配
+static HTTPClient* stt_http_client_stt = nullptr;
+
 String stt_gainToken() {
   HTTPClient stt_http;
   String token;
-  String url = String("https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=") + STT_CLIENT_ID + "&client_secret=" + STT_CLIENT_SECRET;
- 
+  String url = String("http://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=") + STT_CLIENT_ID + "&client_secret=" + STT_CLIENT_SECRET;
+
   stt_http.begin(url);
   int httpCode = stt_http.GET();
- 
+
   if (httpCode > 0) {
     String payload = stt_http.getString();
     //Serial.println("STT Token response: " + payload); // 添加调试信息
@@ -53,7 +56,7 @@ String stt_gainToken() {
   stt_http.end();
   return token;
 }
- 
+
 void stt_assembleJson() {
   memset(data_json, '\0', data_json_len * sizeof(char));
   strcat(data_json, "{");
@@ -71,9 +74,11 @@ void stt_assembleJson() {
   strcat(data_json, "}");
   //Serial.println(data_json);
 }
- 
- 
+
 String sendToSTT() {
+  // 检查是否有足够内存
+  Serial.printf("Before STT request - Free heap: %d\n", ESP.getFreeHeap());
+  
   // 检查令牌是否有效，如果无效则重新获取
   if (stt_token == NULL || stt_token.length() == 0) {
     Serial.println("STT token is invalid, trying to get a new one...");
@@ -85,16 +90,25 @@ String sendToSTT() {
   }
   
   stt_assembleJson();
-  HTTPClient http_client_stt;
-  http_client_stt.begin("http://vop.baidu.com/server_api");//短语音识别请求地址: 标准版http://vop.baidu.com/server_api, 极速版https://vop.baidu.com/pro_api
-  http_client_stt.addHeader("Content-Type", "application/json");
+  
+  // 创建或重用HTTPClient对象
+  if (stt_http_client_stt == nullptr) {
+    stt_http_client_stt = new HTTPClient;
+    if (stt_http_client_stt) {
+      stt_http_client_stt->begin("http://vop.baidu.com/server_api");//短语音识别请求地址: 标准版http://vop.baidu.com/server_api, 极速版https://vop.baidu.com/pro_api
+      stt_http_client_stt->addHeader("Content-Type", "application/json");
+    } else {
+      Serial.println("Failed to create HTTPClient object for STT");
+      return "";
+    }
+  }
 
-  int httpCode = http_client_stt.POST(data_json);
+  int httpCode = stt_http_client_stt->POST(data_json);
   if (httpCode > 0) {
     if (httpCode == HTTP_CODE_OK) {
-      String response = http_client_stt.getString();
+      String response = stt_http_client_stt->getString();
       Serial.println("语音识别完整响应: " + response);
-      
+
       // 检查响应中是否包含错误信息
       DynamicJsonDocument respDoc(1024);
       deserializeJson(respDoc, response);
@@ -109,11 +123,11 @@ String sendToSTT() {
           if (stt_token != NULL && stt_token.length() > 0) {
             // 重新尝试一次识别
             stt_assembleJson();
-            httpCode = http_client_stt.POST(data_json);
+            httpCode = stt_http_client_stt->POST(data_json);
             if (httpCode == HTTP_CODE_OK) {
-              response = http_client_stt.getString();
+              response = stt_http_client_stt->getString();
               Serial.println("语音识别完整响应: " + response);
-              http_client_stt.end();
+              // 注意：这里不清除连接，以便重用
               
               // 解析识别结果
               DynamicJsonDocument resultDoc(1024);
@@ -129,7 +143,7 @@ String sendToSTT() {
           }
         }
         
-        http_client_stt.end();
+        // 注意：这里不清除连接，以便重用
         return String("识别失败: ") + errMsg;
       }
       
@@ -138,24 +152,31 @@ String sendToSTT() {
         JsonArray resultArray = respDoc["result"];
         if (resultArray.size() > 0) {
           String result = resultArray[0].as<String>();
-          http_client_stt.end();
+          if (result.length() == 0) {
+            Serial.println("语音识别成功但结果为空，可能是音频质量差或环境太安静");
+            // 注意：这里不清除连接，以便重用
+            return "";
+          }
+          Serial.println("语音识别结果: " + result);
+          // 注意：这里不清除连接，以便重用
           return result;
         }
       }
       
-      http_client_stt.end();
+      Serial.println("未获取到识别结果，检查音频输入或网络连接");
+      // 注意：这里不清除连接，以便重用
       return "";
     }
   } else {
-    Serial.printf("[HTTP] POST failed, error: %s\n", http_client_stt.errorToString(httpCode).c_str());
-    http_client_stt.end();
+    Serial.printf("[HTTP] POST failed, error: %s\n", stt_http_client_stt->errorToString(httpCode).c_str());
+    // 注意：这里不清除连接，以便重用
     return String("响应失败请重新获取!");
   }
   
-  http_client_stt.end();
+  // 注意：这里不清除连接，以便重用
   return "";
 }
- 
+
 void stt_setup()
 {
   stt_token = stt_gainToken();

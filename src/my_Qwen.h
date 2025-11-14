@@ -1,6 +1,6 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <WiFiClientSecure.h>
+#include <WiFiClient.h>  // 使用普通WiFiClient而不是WiFiClientSecure
 
 // 通义千问API配置
 // 请确保API Key具有访问通义千问服务的权限
@@ -8,6 +8,9 @@
 const char* QWEN_API_KEY = "sk-6d02eabb93dd46c785f5e1020b930913	";  // 替换为您的DashScope API Key
 
 String Qwen_accessToken;  // 通义千问不需要单独的访问令牌，直接使用API Key
+
+// 使用静态全局对象以减少内存分配
+static WiFiClient* client = nullptr;
 
 String getQwenAnswer(String inputText) {
   // 检查API Key是否已配置
@@ -25,17 +28,22 @@ String getQwenAnswer(String inputText) {
     return "<error>";
   }
   
+  // 创建或重用WiFiClient对象
+  if (client == nullptr) {
+    client = new WiFiClient;
+    if (!client) {
+      Serial.println("Failed to create WiFiClient object");
+      return "<error>";
+    }
+  }
+  
   HTTPClient http;
   http.setTimeout(30000); // 30秒超时
   
-  // 通义千问API端点
-  String apiUrl = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation";
+  // 通义千问API端点 (使用HTTP而不是HTTPS来减少内存使用)
+  String apiUrl = "http://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation";
   
-  // 使用安全连接
-  WiFiClientSecure client;
-  client.setInsecure(); // 在生产环境中应该使用证书验证
-  
-  http.begin(client, apiUrl);
+  http.begin(*client, apiUrl);
   http.addHeader("Authorization", "Bearer " + String(QWEN_API_KEY));
   http.addHeader("Content-Type", "application/json");
   // 不启用SSE流式输出，获取标准JSON响应
@@ -43,28 +51,24 @@ String getQwenAnswer(String inputText) {
   // 构建请求参数
   String payload = "{\"model\": \"qwen-turbo\", \"input\": {\"messages\": [{\"role\": \"user\", \"content\": \"" + inputText + "，请用200字以内回答。\"}]}, \"parameters\": {\"max_tokens\": 1500}}";
   
+  // 检查是否有足够内存
+  Serial.printf("Before Qwen request - Free heap: %d\n", ESP.getFreeHeap());
   
   int httpResponseCode = http.POST(payload);
   if (httpResponseCode == 200) {
     String response = http.getString();
     http.end();
     
-
     // 解析JSON响应
     DynamicJsonDocument jsonDoc(2048);
     DeserializationError error = deserializeJson(jsonDoc, response);
+    
     if (error) {
       Serial.println("JSON解析失败: " + String(error.c_str()));
-      // 尝试处理SSE格式的响应
-      // 查找最后一个包含完整结果的data行
-      int lastDataIndex = response.lastIndexOf("data:");
-      if (lastDataIndex != -1) {
-        String lastDataLine = response.substring(lastDataIndex + 5);
-        // 截取到行尾
-        int nextLineIndex = lastDataLine.indexOf("\n");
-        if (nextLineIndex != -1) {
-          lastDataLine = lastDataLine.substring(0, nextLineIndex);
-        }
+      // 尝试解析SSE流式响应中的最后一行有效数据
+      int lastNewline = response.lastIndexOf("\n");
+      if (lastNewline > 0) {
+        String lastDataLine = response.substring(lastNewline + 1);
         lastDataLine.trim();
         
         Serial.println("尝试解析最后的SSE数据: " + lastDataLine);
