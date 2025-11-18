@@ -83,3 +83,10 @@ void tts_setup()
   tts_token = tts_gainToken();
   //Serial.println(tts_token.c_str());
 }
+String getTTSUrl(String InputText) {
+    InputText = urlEncode(InputText);
+    InputText = urlEncode(InputText);
+    
+    String url = String(tts_url) + "?tex=" + InputText.c_str() + "&tok=" + tts_token.c_str() + "&cuid=" + TTS_CUID + "&ctp=1&lan=zh&spd=5&pit=5&vol=1&per=5&aue=4";
+    return url;
+}

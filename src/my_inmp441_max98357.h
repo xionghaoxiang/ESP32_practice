@@ -50,14 +50,15 @@ const i2s_pin_config_t max98357_gpio_config = {
   .data_in_num = -1
 };
  
-void inmp441_max98357_setup()
+void inmp441_setup()
 {
- 
-  i2s_driver_install(I2S_NUM_0, &inmp441_i2s_config, 0, NULL);
-  i2s_set_pin(I2S_NUM_0, &inmp441_gpio_config);
- 
-  i2s_driver_install(I2S_NUM_1, &max98357_i2s_config, 0, NULL);
-  i2s_set_pin(I2S_NUM_1, &max98357_gpio_config);
+  i2s_driver_install(I2S_NUM_1, &inmp441_i2s_config, 0, NULL);
+  i2s_set_pin(I2S_NUM_1, &inmp441_gpio_config);
+}
+void max98357_setup()
+{
+  i2s_driver_install(I2S_NUM_0, &max98357_i2s_config, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &max98357_gpio_config);
 }
  
 void inmp441_max98357_loop()
@@ -65,9 +66,9 @@ void inmp441_max98357_loop()
   uint16_t data[1024];
   esp_err_t result;
   size_t bytes_read = 0;
-  result = i2s_read(I2S_NUM_0, &data, sizeof(data), &bytes_read, portMAX_DELAY);
+  result = i2s_read(I2S_NUM_1, &data, sizeof(data), &bytes_read, portMAX_DELAY);
   //Serial.println(bytes_read);
   size_t bytes_write;
-  result = i2s_write(I2S_NUM_1, &data, sizeof(data), &bytes_write, portMAX_DELAY);
+  result = i2s_write(I2S_NUM_0, &data, sizeof(data), &bytes_write, portMAX_DELAY);
  
 }
