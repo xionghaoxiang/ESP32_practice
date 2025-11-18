@@ -9,7 +9,7 @@
 #include "my_tts.h"
 #include "my_inmp441_max98357.h"
 #include "my_Qwen.h"  // 替换为通义千问
-
+#include "Audio.h"
 
 // LED1 引脚定义
 #define LED1 9
@@ -61,13 +61,13 @@ class MyCallbacks: public BLECharacteristicCallbacks {
             else if(rxValue[0]=='o' && rxValue[1]=='f' && rxValue[2]=='f')
                 digitalWrite(LED1, LOW);   // 熄灭 LED
             // 设置命令标志而不是直接处理
-            else if(rxValue[0]=='s' && rxValue[1]=='t' && rxValue[2]=='a' && rxValue[3]=='t' && rxValue[4]=='u' && rxValue[5]=='s'&& rxValue[6]=='1') {
+            else if(rxValue[0]=='s' && rxValue[1]=='t' && rxValue[2]=='a' && rxValue[3]=='t' && rxValue[4]=='u' && rxValue[5]=='s'&& rxValue[6]=='1'&& rxValue[7]=='\n') {
                 bluetoothCommand = 1; // 设置status1命令标志
             }
-            else if(rxValue[0]=='s' && rxValue[1]=='t' && rxValue[2]=='a' && rxValue[3]=='t' && rxValue[4]=='u' && rxValue[5]=='s'&& rxValue[6]=='2') {
+            else if(rxValue[0]=='s' && rxValue[1]=='t' && rxValue[2]=='a' && rxValue[3]=='t' && rxValue[4]=='u' && rxValue[5]=='s'&& rxValue[6]=='2'&& rxValue[7]=='\n') {
                 bluetoothCommand = 2; // 设置status2命令标志
             }
-            else if(rxValue[0]=='s' && rxValue[1]=='t' && rxValue[2]=='a' && rxValue[3]=='t' && rxValue[4]=='u' && rxValue[5]=='s'&& rxValue[6]=='3') {
+            else if(rxValue[0]=='s' && rxValue[1]=='t' && rxValue[2]=='a' && rxValue[3]=='t' && rxValue[4]=='u' && rxValue[5]=='s'&& rxValue[6]=='3'&& rxValue[7]=='\n') {
                 bluetoothCommand = 3; // 设置status3命令标志
             }
         }
