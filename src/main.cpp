@@ -24,7 +24,7 @@ const char* streamUrls[] = {
     "http://music.163.com/song/media/outer/url?id=431551064.mp3",
     "http://music.163.com/song/media/outer/url?id=1980818176.mp3",
     "http://music.163.com/song/media/outer/url?id=28768892.mp3", // 示例第三首歌曲
-    // 可以继续添加更多音频流URL
+    "http://music.163.com/song/media/outer/url?id=2628344945.mp3"// 可以继续添加更多音频流URL
 };
 const int streamCount = sizeof(streamUrls) / sizeof(streamUrls[0]); // 自动计算音频流数量
 int currentStreamIndex = 0; // 当前播放的音频流索引
@@ -88,21 +88,16 @@ void handleBluetoothCommand(int command) {
     Serial.printf("Handling Bluetooth command: %d, Free heap: %d\n", command, ESP.getFreeHeap());
     
     switch(command) {
-        case 4:{
-        LOG_F("Connecting to stream: %s", streamUrls[currentStreamIndex]);
-        audio.setVolume(10); 
-        audio.connecttohost(streamUrls[currentStreamIndex]);
-        isplaying = 1;   
-        LOG("Initialization complete!");
-            }
-                break;
+       
         case 1: {
             int audioLen = 0;
-            String audioData = sendToTTS("请减速慢行", &audioLen);
+            String audioData = sendToTTS("您已超速请减速慢行", &audioLen);
+            audio.setVolume(15);
             if (audioLen > 0) {
                 // 播放合成的音频
                 size_t bytes_written = 0;
                 esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
+                delay(audioLen / 64);
             }
             break;
         }
@@ -113,6 +108,7 @@ void handleBluetoothCommand(int command) {
                 // 播放合成的音频
                 size_t bytes_written = 0;
                 esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
+                delay(audioLen / 64);  
             }
             break;
         }
@@ -123,9 +119,29 @@ void handleBluetoothCommand(int command) {
                 // 播放合成的音频
                 size_t bytes_written = 0;
                 esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
+                delay(audioLen / 64); 
             }
             break;
         }
+        case 4:{
+             int audioLen = 0;
+            String audioData = sendToTTS("电池电量低", &audioLen);
+            if (audioLen > 0) {
+                // 播放合成的音频
+                size_t bytes_written = 0;
+                esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
+                delay(audioLen / 64); 
+            }
+            }
+                break;
+        case 5:{
+        LOG_F("Connecting to stream: %s", streamUrls[currentStreamIndex]);
+        audio.setVolume(10); 
+        audio.connecttohost(streamUrls[currentStreamIndex]); 
+        isplaying = 1;
+        LOG("Initialization complete!");
+            }
+                break;
         default:
             break;
     }
@@ -202,14 +218,8 @@ void loop() {
     
     if (isplaying == 1)
       { audio.loop();} 
-//       //每10秒报告一次状态
-//   static unsigned long lastReport = 0;
-//   if (millis() - lastReport > 10000) {
-//     LOG_F("Status: Playing %d secs, Heap: %d bytes", 
-//           millis() / 1000, ESP.getFreeHeap());
-//     lastReport = millis();
-//   }
-    // 处理来自STM32的串口通信
+
+    // 处理来自蓝牙的串口通信
     if (Serial2.available() > 0)
     {
         String receivedData = Serial2.readStringUntil('\n');
@@ -225,6 +235,10 @@ void loop() {
         {
             bluetoothCommand = 3;
         }
+        else if (receivedData == "status4")
+        {
+            bluetoothCommand = 4;
+        }
         else if (receivedData == "on")
         {
             digitalWrite(LED1, HIGH);
@@ -235,7 +249,7 @@ void loop() {
         }
         else if (receivedData == "play")
         {
-            bluetoothCommand = 4;
+            bluetoothCommand = 5;
         }
        
         else if(receivedData == "stop")
@@ -258,41 +272,66 @@ void loop() {
             }
         }
         else if(receivedData == "next_song")
-{
-    // 停止当前播放
-    audio.stopSong();
-    
-    // 切换到下一个音频流（循环切换）
-    currentStreamIndex = (currentStreamIndex + 1) % streamCount;
-    
-    // 播放下一个音频流
-    audio.setVolume(10); 
-    audio.connecttohost(streamUrls[currentStreamIndex]);
-    isplaying = 1;
-    
-    Serial.printf("Switched to stream %d: %s\n", currentStreamIndex, streamUrls[currentStreamIndex]);
-}
-       else if(receivedData == "previous_song")
-{
-    // 停止当前播放
-    audio.stopSong();
-    
-    // 切换到上一个音频流（循环切换）
-    currentStreamIndex = (currentStreamIndex - 1 + streamCount) % streamCount;
-    
-    // 播放上一个音频流
-    audio.setVolume(10); 
-    audio.connecttohost(streamUrls[currentStreamIndex]);
-    isplaying = 1;
-    
-    Serial.printf("Switched to stream %d: %s\n", currentStreamIndex, streamUrls[currentStreamIndex]);
-}
+        {
+            // 停止当前播放
+            audio.stopSong();
+            
+            // 切换到下一个音频流（循环切换）
+            currentStreamIndex = (currentStreamIndex + 1) % streamCount;
+            
+            // 播放下一个音频流
+            audio.setVolume(10); 
+            audio.connecttohost(streamUrls[currentStreamIndex]);
+            isplaying = 1;
+            
+            Serial.printf("Switched to stream %d: %s\n", currentStreamIndex, streamUrls[currentStreamIndex]);
+        }
+            else if(receivedData == "previous_song")
+        {
+            // 停止当前播放
+            audio.stopSong();
+            
+            // 切换到上一个音频流（循环切换）
+            currentStreamIndex = (currentStreamIndex - 1 + streamCount) % streamCount;
+            
+            // 播放上一个音频流
+            audio.setVolume(10); 
+            audio.connecttohost(streamUrls[currentStreamIndex]);
+            isplaying = 1;
+            
+            Serial.printf("Switched to stream %d: %s\n", currentStreamIndex, streamUrls[currentStreamIndex]);
+        }
+  
         else
         {
         
         }
         
         Serial2.printf("Received: %s \r\n", receivedData);
+    }
+
+
+    //处理STM32串口通信
+    if (Serial1.available() > 0)
+    {
+        String receivedData = Serial1.readStringUntil('\n');
+        if (receivedData == "status1")
+        {
+            bluetoothCommand = 1;
+        }
+        else if (receivedData == "status2")
+        {
+            bluetoothCommand = 2;
+        }
+        else if (receivedData == "status3")
+        {
+            bluetoothCommand = 3;
+        }
+        else if (receivedData == "status4")
+        {
+            bluetoothCommand = 4;
+        }
+        Serial1.printf("Received: %s \r\n", receivedData);
     }
 
     // 处理蓝牙命令
@@ -327,7 +366,31 @@ void loop() {
                 stt_setup();
                 stt_assembleJson();
                 String recognizedText = sendToSTT(); // 直接获取识别结果
+
+
+
+               if (recognizedText.indexOf("开灯") != -1)
+                {
+                    digitalWrite(LED1, HIGH);
+                }
+                else if (recognizedText.indexOf("关灯") != -1)
+                {
+                    digitalWrite(LED1, LOW);
+                }
+                else if(recognizedText.indexOf("播放音乐") != -1)
+                {
+                    bluetoothCommand = 5;
+                }
+                else if(recognizedText.indexOf("停止播放") != -1)
+                {
+                    audio.stopSong();
+                    isplaying = 0;
+                }
+                
                 int audioLen = 0;
+
+
+
                 String audioData = sendToTTS(recognizedText, &audioLen);
                 Serial.println("TTS conversion completed");
                 if (audioLen > 0)
@@ -335,6 +398,8 @@ void loop() {
                  // 播放合成的音频
                 size_t bytes_written = 0;
                 esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
+                delay(audioLen / 64);
+
                 Serial.printf("Wrote %d bytes to I2S for playback\n", bytes_written);
                 } 
 
