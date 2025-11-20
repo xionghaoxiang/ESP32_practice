@@ -8,7 +8,7 @@
 #include "my_stt.h"
 #include "my_tts.h"
 #include "my_inmp441_max98357.h"
-#include "my_Qwen.h" // 替换为通义千问
+#include "my_Qwen.h" // 通义千问
 #include "Audio.h"
 #include "my_playlist.h"
 // LED1 引脚定义
@@ -16,8 +16,10 @@
 #define LOG(msg) Serial.printf("[%5lu ms] %s\n", millis(), msg)
 #define LOG_F(format, ...) Serial.printf("[%5lu ms] " format, millis(), ##__VA_ARGS__)
 // 定义按键引脚
-const int BUTTON_PIN = 3; // 3号引脚作为按键控制语音输入
-bool isListening = false; // 语音识别状态标志
+const int BUTTON_PIN = 3;   // 3号引脚作为按键控制语音输入
+const int BUTTON_PIN_2 = 7; // 7号引脚作为语音聊天
+bool isListening = false;   // 语音识别状态标志
+bool isChatting = false;    // 语音聊天状态标志
 Audio audio;
 PlaylistManager playlist;
 const char *streamUrls[] = {
@@ -335,15 +337,14 @@ void setup()
     // 电脑串口
     Serial.begin(115200);
     delay(1000);
-    Serial.println("ESP32 Started");
-    Serial.printf("startup FreeHeap: %d, PSRAM size: %d, FreePsram (approx): %d\n",
-                  ESP.getFreeHeap(), ESP.getPsramSize(), ESP.getPsramSize() - 1000000 + ESP.getFreeHeap());
 
     // 蓝牙串口
     Serial2.begin(9600, SERIAL_8N1, 11, 12);
     // STM32串口
     Serial1.begin(9600, SERIAL_8N1, 13, 14); // 可选：用于与另一个设备通信
 
+    Serial2.println("ESP32 Started");
+    Serial2.printf("startup FreeHeap: %d, PSRAM size: %d, FreePsram (approx): %d\n", ESP.getFreeHeap(), ESP.getPsramSize(), ESP.getPsramSize() - 1000000 + ESP.getFreeHeap());
     // 设置 LED 引脚为输出
     pinMode(LED1, OUTPUT);
     digitalWrite(LED1, LOW);
@@ -355,13 +356,13 @@ void setup()
     audio.setVolume(10);
     // 初始化按键引脚
     pinMode(BUTTON_PIN, INPUT_PULLUP);
-
+    pinMode(BUTTON_PIN_2, INPUT_PULLUP);
     wifi_setup();
     stt_token = stt_gainToken();
     tts_token = tts_gainToken();
 
-    Serial.println("setup complete");
-    Serial.println("Press button to start voice recognition...");
+    Serial2.println("setup complete");
+    Serial2.println("Press button to start voice recognition...");
 
     // 初始化 BLE
     // BLEDevice::init("ESP32test");
@@ -553,17 +554,18 @@ void loop()
     }
     // 检测按键按下以启动语音识别
     if (digitalRead(BUTTON_PIN) == LOW)
+
     {
         // 按键按下，开始语音识别
         if (!isListening)
         {
             isListening = true;
-            Serial.println("Button pressed, starting voice recognition...");
+            Serial2.println("Button pressed, starting voice recognition...");
 
             // 采集音频数据到adc_data数组
             size_t bytes_read = 0;
             esp_err_t result = i2s_read(I2S_NUM_1, &adc_data, sizeof(adc_data), &bytes_read, portMAX_DELAY);
-            Serial.printf("Read %d bytes from I2S\n", bytes_read);
+            Serial2.printf("Read %d bytes from I2S\n", bytes_read);
 
             // 检查是否读取到数据
             if (bytes_read > 0)
@@ -615,7 +617,7 @@ void loop()
 
                 int audioLen = 0;
                 String audioData = sendToTTS(recognizedText, &audioLen);
-                Serial.println("TTS conversion completed");
+                Serial2.println("TTS conversion completed");
                 if (audioLen > 0)
                 {
                     // 播放 TTS 前：停止 I2S 并恢复为 16kHz
@@ -628,7 +630,7 @@ void loop()
 
                     uint32_t playbackMs = (audioLen * 1000) / (16000 * 2);
                     delay(playbackMs + 10);
-                    Serial.println("TTS playback completed");
+                    Serial2.println("TTS playback completed");
                 }
                 if (wasPlaying)
                 {
@@ -639,37 +641,84 @@ void loop()
                     audio.pauseResume(); // 再次调用恢复
                     isplaying = 1;
                 }
-                // 将识别到的文字发送给大模型
-                //     if (recognizedText.length() > 0 && recognizedText != "") {
-                //         Serial.println("Sending text to Qwen: " + recognizedText);  // 修改为通义千问
-                //         String answer = getQwenAnswer(recognizedText);  // 调用通义千问
-                //         Serial.println("Qwen answer: " + answer);  // 修改为通义千问
-                //         // 将通义千问的回答转换为语音
-                //         if (answer.length() > 0 && answer != "<error>") {
-                //             Serial.println("Converting answer to speech...");
-                //             int audioLen = 0;
-                //             String audioData = sendToTTS(answer, &audioLen);
-                //             Serial.println("TTS conversion completed");
-                //             if (audioLen > 0) {
-                //                 // 播放合成的音频
-                //                 size_t bytes_written = 0;
-                //                 esp_err_t writeResult = i2s_write(I2S_NUM_1, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
-                //                 Serial.printf("Wrote %d bytes to I2S for playback\n", bytes_written);
-                //             } else {
-                //                 Serial.println("No audio data received from TTS");
-                //             }
-                //         }
-                //     } else {
-                //         Serial.println("No valid text recognized, skipping Qwen call");  // 修改为通义千问
-                //     }
-                // }
             }
             else
-                Serial.println("No audio data captured");
+                Serial2.println("No audio data captured");
             isListening = false;
         }
 
         // 简单的按键去抖动处理
         delay(500);
+    }
+
+    if (digitalRead(BUTTON_PIN_2) == LOW)
+    {
+        if (!isChatting)
+        {
+            isChatting = true; // 这里可以添加语音聊天的处理逻辑
+        }
+        bool wasPlaying = (isplaying == 1);
+        // 优先使用库的 pauseResume 切换暂停（无缝）
+        if (wasPlaying)
+        {
+            audio.pauseResume(); // 暂停流媒体（若库实现了）
+            isplaying = 0;
+        }
+        Serial2.println("Button2 pressed, starting voice recognition...");
+        // 采集音频数据到adc_data数组
+        size_t bytes_read = 0;
+        esp_err_t result = i2s_read(I2S_NUM_1, &adc_data, sizeof(adc_data), &bytes_read, portMAX_DELAY);
+        Serial2.printf("Read %d bytes from I2S\n", bytes_read);
+        // 检查是否读取到数据
+        if (bytes_read > 0)
+        {
+            // 执行语音识别流程
+            stt_setup();
+            stt_assembleJson();
+            String recognizedText = sendToSTT(); // 直接获取识别结果
+
+            if (recognizedText.length() > 0 && recognizedText != "")
+            {
+                Serial2.println("Sending text to Qwen: " + recognizedText); // 修改为通义千问
+                String answer = getQwenAnswer(recognizedText);              // 调用通义千问
+                Serial2.println("Qwen answer: " + answer);                  // 修改为通义千问
+                // 将通义千问的回答转换为语音
+                if (answer.length() > 0 && answer != "<error>")
+                {
+                    Serial2.println("Converting answer to speech...");
+                    int audioLen = 0;
+                    String audioData = sendToTTS(answer, &audioLen);
+
+                    Serial2.println("TTS conversion completed");
+                    if (audioLen > 0)
+                    {
+                        // 播放 TTS 前：停止 I2S 并恢复为 16kHz
+                        i2s_stop(I2S_NUM_0);
+                        delay(10);
+                        i2s_set_sample_rates(I2S_NUM_0, 16000);
+                        delay(10);
+                        size_t bytes_written = 0;
+                        esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
+                        uint32_t playbackMs = (audioLen * 1000) / (16000 * 2);
+                        delay(playbackMs + 10);
+                        Serial2.println("TTS playback completed");
+                        if (wasPlaying)
+                        {
+                            i2s_stop(I2S_NUM_0);
+                            delay(10);
+                            i2s_set_sample_rates(I2S_NUM_0, 44100); // 音乐通常是 44.1kHz
+                            delay(10);
+                            audio.pauseResume(); // 再次调用恢复
+                            isplaying = 1;
+                        }
+                    }
+                }
+                else
+
+                    Serial.println("No valid text recognized, skipping Qwen call"); // 修改为通义千问
+            }
+        }
+        else
+            Serial.println("No audio data captured");
     }
 }
