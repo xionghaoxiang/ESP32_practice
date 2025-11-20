@@ -270,6 +270,7 @@ void handleBluetoothCommand(int command)
         if (currentVolume < 21)
         {
             audio.setVolume(currentVolume + 1);
+            Serial.printf("Volume: %d\n", audio.getVolume());
         }
     }
     break;
@@ -279,6 +280,7 @@ void handleBluetoothCommand(int command)
         if (currentVolume > 0)
         {
             audio.setVolume(currentVolume - 1);
+            Serial.printf("Volume: %d\n", audio.getVolume());
         }
     }
     break;
@@ -602,6 +604,15 @@ void loop()
                 {
                     bluetoothCommand = 8;
                 }
+                bool wasPlaying = (isplaying == 1);
+
+                // 优先使用库的 pauseResume 切换暂停（无缝）
+                if (wasPlaying)
+                {
+                    audio.pauseResume(); // 暂停流媒体（若库实现了）
+                    isplaying = 0;
+                }
+
                 int audioLen = 0;
                 String audioData = sendToTTS(recognizedText, &audioLen);
                 Serial.println("TTS conversion completed");
@@ -618,6 +629,15 @@ void loop()
                     uint32_t playbackMs = (audioLen * 1000) / (16000 * 2);
                     delay(playbackMs + 10);
                     Serial.println("TTS playback completed");
+                }
+                if (wasPlaying)
+                {
+                    i2s_stop(I2S_NUM_0);
+                    delay(10);
+                    i2s_set_sample_rates(I2S_NUM_0, 44100); // 音乐通常是 44.1kHz
+                    delay(10);
+                    audio.pauseResume(); // 再次调用恢复
+                    isplaying = 1;
                 }
                 // 将识别到的文字发送给大模型
                 //     if (recognizedText.length() > 0 && recognizedText != "") {
@@ -642,7 +662,7 @@ void loop()
                 //     } else {
                 //         Serial.println("No valid text recognized, skipping Qwen call");  // 修改为通义千问
                 //     }
-                // } else {
+                // }
             }
             else
                 Serial.println("No audio data captured");
