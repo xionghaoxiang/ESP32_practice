@@ -10,6 +10,7 @@
 #include "my_inmp441_max98357.h"
 #include "my_Qwen.h" // 替换为通义千问
 #include "Audio.h"
+#include "my_playlist.h"
 // LED1 引脚定义
 #define LED1 9
 #define LOG(msg) Serial.printf("[%5lu ms] %s\n", millis(), msg)
@@ -18,6 +19,7 @@
 const int BUTTON_PIN = 3; // 3号引脚作为按键控制语音输入
 bool isListening = false; // 语音识别状态标志
 Audio audio;
+PlaylistManager playlist;
 const char *streamUrls[] = {
     "http://music.163.com/song/media/outer/url?id=431551064.mp3",
     "http://music.163.com/song/media/outer/url?id=2692390309.mp3",
@@ -97,7 +99,7 @@ void handleBluetoothCommand(int command)
 
         int audioLen = 0;
         String audioData = sendToTTS("您已超速请减速慢行", &audioLen);
-        audio.setVolume(12); // 提高音量以确保提示音清晰可闻
+        audio.setVolume(15);
         if (audioLen > 0)
         {
             // 播放 TTS（保持你已有的 I2S 恢复/播放逻辑）
@@ -268,7 +270,6 @@ void handleBluetoothCommand(int command)
         if (currentVolume < 21)
         {
             audio.setVolume(currentVolume + 1);
-            Serial.printf("Volume increased to %d\n", audio.getVolume());
         }
     }
     break;
@@ -278,7 +279,6 @@ void handleBluetoothCommand(int command)
         if (currentVolume > 0)
         {
             audio.setVolume(currentVolume - 1);
-            Serial.printf("Volume decreased to %d\n", audio.getVolume());
         }
     }
     break;
@@ -350,7 +350,7 @@ void setup()
     // max98357_setup();
 
     audio.setPinout(17, 18, 16);
-    audio.setVolume(6); // 设置初始音量
+    audio.setVolume(10);
     // 初始化按键引脚
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
@@ -395,6 +395,7 @@ void loop()
     if (Serial2.available() > 0)
     {
         String receivedData = Serial2.readStringUntil('\n');
+        receivedData.trim();
         if (receivedData == "status1")
         {
             bluetoothCommand = 1;
@@ -450,6 +451,73 @@ void loop()
         else if (receivedData == "pause/resume")
         {
             bluetoothCommand = 11;
+        }
+        // 处理播放列表命令
+        // ...existing code...
+        else if (receivedData.startsWith("ADDURL:"))
+        {
+            String url = receivedData.substring(7); // 去掉 "ADDURL:"
+            playlist.addURL(url);
+            Serial2.printf("OK: Added URL\r\n");
+        }
+        else if (receivedData.startsWith("PLAYLIST:"))
+        {
+            String arg = receivedData.substring(9); // 去掉 "PLAYLIST:"
+            arg.trim();
+            if (arg.startsWith("["))
+            {
+                // 传入 JSON 列表，设置播放列表
+                if (playlist.setFromJSON(arg))
+                {
+                    Serial2.printf("OK: Playlist set (%d items)\r\n", playlist.getSize());
+                }
+                else
+                {
+                    Serial2.printf("ERROR: Invalid JSON\r\n");
+                }
+            }
+            else if (arg.length() > 0 && isDigit(arg.charAt(0)))
+            {
+                // 传入索引，按索引播放
+                int index = arg.toInt();
+                String url = playlist.getURL(index);
+                if (url.length() > 0)
+                {
+                    // 停止当前播放
+                    if (isplaying == 1)
+                    {
+                        audio.stopSong();
+                    }
+                    // 播放列表中的音乐
+                    i2s_stop(I2S_NUM_0);
+                    delay(10);
+                    i2s_set_sample_rates(I2S_NUM_0, 44100);
+                    delay(10);
+                    audio.setVolume(10);
+                    audio.connecttohost(url.c_str());
+                    isplaying = 1;
+                    Serial2.printf("OK: Playing from playlist index %d\r\n", index);
+                }
+                else
+                {
+                    Serial2.printf("ERROR: Invalid index\r\n");
+                }
+            }
+            else
+            {
+                Serial2.printf("ERROR: PLAYLIST argument invalid\r\n");
+            }
+        }
+
+        else if (receivedData == "LISTSHOW")
+        {
+            playlist.printAll();
+            Serial2.printf("OK: Playlist printed to Serial\r\n");
+        }
+        else if (receivedData == "LISTCLEAR")
+        {
+            playlist.clear();
+            Serial2.printf("OK: Playlist cleared\r\n");
         }
         Serial2.printf("Received: %s \r\n", receivedData);
     }
