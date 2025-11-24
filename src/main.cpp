@@ -21,6 +21,8 @@ const int BUTTON_PIN_2 = 7; // 7号引脚作为语音聊天
 bool isListening = false;   // 语音识别状态标志
 bool isChatting = false;    // 语音聊天状态标志
 Audio audio;
+int value = 40;
+int mode = 0;
 PlaylistManager playlist;
 const char *streamUrls[] = {
     "http://music.163.com/song/media/outer/url?id=431551064.mp3",
@@ -39,7 +41,15 @@ int isplaying = 0;
 volatile int bluetoothCommand = 0;
 volatile bool button1Pressed = false;
 volatile bool button2Pressed = false;
-
+const int inputPin = 10;
+volatile long pulseCount = 0;
+// 开始时间
+unsigned long startTime = 0;
+// 中断服务函数，用于计数脉冲
+void pulseCounter()
+{
+    pulseCount++;
+}
 void IRAM_ATTR button1ISR()
 {
     button1Pressed = true;
@@ -532,6 +542,8 @@ void setup()
     pinMode(BUTTON_PIN_2, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), button1ISR, FALLING);
     attachInterrupt(digitalPinToInterrupt(BUTTON_PIN_2), button2ISR, FALLING);
+    attachInterrupt(digitalPinToInterrupt(inputPin), pulseCounter, RISING);
+    startTime = millis();
     wifi_setup();
     stt_token = stt_gainToken();
     tts_token = tts_gainToken();
@@ -706,7 +718,7 @@ void loop()
             // 简单数字检测：允许负号
             if (numStr.length() > 0 && (isDigit(numStr.charAt(0)) || (numStr.charAt(0) == '-' && numStr.length() > 1 && isDigit(numStr.charAt(1)))))
             {
-                int value = numStr.toInt(); // 转为 int
+                value = numStr.toInt(); // 转为 int
                 Serial1.write(value);
             }
             else
@@ -765,6 +777,23 @@ void loop()
             bluetoothCommand = 4;
         }
         Serial2.printf("Received: %s \r\n", receivedData);
+    }
+    if (millis() - startTime >= 100)
+    {                                       // 每秒统计一次
+        float frequency = pulseCount / 0.1; // 计算频率
+                                            // Serial.println("Frequency: " + String(frequency) + " Hz");
+        pulseCount = 0;
+        startTime = millis();
+        if (frequency >= value * 1000 && mode == 0 && frequency <= 52000)
+        {
+            bluetoothCommand = 1; // 超速
+            mode = 1;
+        }
+        if (frequency <= value * 1000 - 1000 && mode == 1)
+        {
+
+            mode = 0;
+        }
     }
     // 处理蓝牙命令
     if (bluetoothCommand != 0)
