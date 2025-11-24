@@ -17,6 +17,17 @@ const char *tts_url = "http://tsn.baidu.com/text2audio"; // 使用HTTP而不是H
 // 使用静态HTTPClient对象以减少内存分配
 static HTTPClient *tts_http = nullptr;
 
+typedef struct
+{
+  int per; // 发音人编号
+  int spd; // 语速
+  int pit; // 音调
+  int vol; // 音量
+} TTSConfig;
+
+TTSConfig currentTtsConfig = {0, 5, 5, 5};
+extern TTSConfig currentTtsConfig;
+
 String tts_gainToken()
 {
   HTTPClient http;
@@ -102,4 +113,55 @@ String getTTSUrl(String InputText)
 
   String url = String(tts_url) + "?tex=" + InputText.c_str() + "&tok=" + tts_token.c_str() + "&cuid=" + TTS_CUID + "&ctp=1&lan=zh&spd=5&pit=5&vol=1&per=5&aue=4";
   return url;
+}
+
+String sendToTTSWithConfig(String InputText, int *len, const TTSConfig &config)
+{
+  Serial.printf("Before TTS request - Free heap: %d\n", ESP.getFreeHeap());
+
+  InputText = urlEncode(InputText);
+  InputText = urlEncode(InputText);
+
+  if (tts_http == nullptr)
+  {
+    tts_http = new HTTPClient;
+    if (tts_http)
+    {
+      tts_http->begin(tts_url);
+      tts_http->addHeader("Content-Type", "application/x-www-form-urlencoded");
+    }
+    else
+    {
+      Serial.println("Failed to create HTTPClient object for TTS");
+      *len = 0;
+      return "";
+    }
+  }
+
+  String payload = String("tex=") + InputText.c_str() +
+                   "&tok=" + tts_token.c_str() +
+                   "&cuid=" + TTS_CUID +
+                   "&ctp=1&lan=zh" +
+                   "&spd=" + String(config.spd) +
+                   "&pit=" + String(config.pit) +
+                   "&vol=" + String(config.vol) +
+                   "&per=" + String(config.per) +
+                   "&aue=4";
+
+  String outputText;
+  int httpCode = tts_http->POST(payload);
+  if (httpCode == HTTP_CODE_OK)
+  {
+    String response = tts_http->getString();
+    *len = tts_http->getSize();
+    Serial.println(*len);
+    return response;
+  }
+  else
+  {
+    Serial.printf("Error in the HTTP request, code: %d\n", httpCode);
+    outputText = String("Error in the HTTP request");
+  }
+
+  return outputText;
 }

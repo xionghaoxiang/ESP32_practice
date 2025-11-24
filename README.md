@@ -26,23 +26,27 @@
 
 ✅ **音频系统**
 - 双 I2S 端口配置：
-  - I2S_NUM_0 RX：INMP441 麦克风输入（16kHz）
+  - I2S_NUM_1 RX：INMP441 麦克风输入（16kHz）
   - I2S_NUM_0 TX：MAX98357 扬声器输出（16kHz TTS / 44.1kHz 音乐）
 - 自动样本率切换与恢复
-- DMA 缓冲优化（4×64KB，减少内存压力）
+- DMA 缓冲优化（8×128KB）
 
 ✅ **蓝牙控制**
-- BLE UART 服务（iPhone/Android 适配）
-- 5 种 TTS 预制命令（车速警告、灯光状态等）
-- 音乐播放控制（mp3play、暂停、恢复）
+- 串口蓝牙通信（通过 GPIO 11/12）
+- 11 种 TTS 预制命令（车速警告、灯光状态等）
+- 音乐播放控制（播放、暂停、音量调节、切歌等）
 
 ✅ **网络音乐流**
 - HTTP/HTTPS 音乐流播放
-- 支持 MP3、AAC 格式
+- 支持 MP3 格式
 - 自动暂停/恢复以便 TTS 中断
+- 播放列表管理功能
 
 ✅ **STM32 串行通信**
 - 支持与下位机 MCU 通信（UART，9600 波特率）
+
+✅ **物理按键控制**
+- 按键中断驱动的语音识别和语音聊天功能
 
 ---
 
@@ -77,10 +81,13 @@
 | 功能        | GPIO  | 说明 |
 |------------|-------|------|
 | 按钮（语音输入） | GPIO 3 | 按下时触发 STT |
-| STM32 RX  | GPIO 13 | 接收 MCU 数据 |
-| STM32 TX  | GPIO 14 | 发送至 MCU |
-| 蓝牙  RX  | GPIO 11 |
-| 蓝牙  TX  | GPIO 12 |
+| 按钮（语音聊天） | GPIO 7 | 按下时触发语音聊天 |
+| LED        | GPIO 9 | 状态指示灯 |
+| STM32 RX   | GPIO 13 | 接收 MCU 数据 |
+| STM32 TX   | GPIO 14 | 发送至 MCU |
+| 蓝牙  RX   | GPIO 11 |
+| 蓝牙  TX   | GPIO 12 |
+
 ---
 
 ## 软件环境
@@ -180,22 +187,46 @@ pio run -e esp32s3 -t monitor
 
 ## 蓝牙命令参考
 
-系统支持通过 BLE UART 接收 5 种预制 TTS 命令。使用蓝牙串口应用（如 Serial Bluetooth Terminal）连接：
+系统支持通过串口蓝牙接收多种命令。使用蓝牙串口应用（如 Serial Bluetooth Terminal）连接：
 
+### TTS 预制命令
 | 命令 | 对应文本 | 场景 |
 |------|--------|------|
 | `status1` | "您已超速，请减速慢行" | 超速警告 |
-| `status2` | "前方有障碍物，请谨慎驾驶" | 障碍物警告 |
-| `status3` | "已关闭车灯，请注意安全" | 灯光状态 |
-| `on` / `off` | 自定义 TTS（需代码修改） | 开关状态 |
-| `mp3play` | 无语音（仅播放音乐） | 控制音乐播放 |
+| `status2` | "请注意转弯" | 转弯提醒 |
+| `status3` | "请注意倒车" | 倒车提醒 |
+| `status4` | "电池电量低" | 电量提醒 |
 
-**BLE 服务 UUID**:  
-`6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
+### 音乐播放控制命令
+| 命令 | 功能 |
+|------|------|
+| `play` | 播放音乐 |
+| `stop` | 停止播放 |
+| `volumeup` | 音量增加 |
+| `volumedown` | 音量减小 |
+| `next_song` | 下一首 |
+| `previous_song` | 上一首 |
+| `pause/resume` | 暂停/恢复 |
 
-**特征UUID**:
-- RX (写入): `6E400003-B5A3-F393-E0A9-E50E24DCCA9E`
-- TX (读取/通知): `6E400002-B5A3-F393-E0A9-E50E24DCCA9E`
+### 灯光控制命令
+| 命令 | 功能 |
+|------|------|
+| `on` | 打开 LED 灯 |
+| `off` | 关闭 LED 灯 |
+
+### 播放列表管理命令
+| 命令 | 功能 |
+|------|------|
+| `ADDURL:<url>` | 添加 URL 到播放列表 |
+| `PLAYLIST:[<url1>,<url2>,...]` | 设置播放列表 |
+| `PLAYLIST:<index>` | 播放指定索引的歌曲 |
+| `LISTSHOW` | 显示播放列表 |
+| `LISTCLEAR` | 清空播放列表 |
+
+### 其他命令
+| 命令 | 功能 |
+|------|------|
+| `velocity:<value>` | 发送给 STM32 的速度信息 |
 
 ---
 
@@ -211,33 +242,48 @@ pio run -e esp32s3 -t monitor
    ↓
 4. I2S 驱动安装（麦克风/扬声器）
    ↓
-5. BLE UART 服务启动 → 等待连接
+5. 按键中断配置
 ```
 
 ### 语音识别流程（按钮触发）
 ```
 按下按钮 → GPIO 中断
    ↓
-采集 4 秒音频（16kHz, 16-bit PCM）
+采集音频（16kHz, 16-bit PCM）
    ↓
 发送至百度 STT API（分块上传）
    ↓
 解析 JSON 响应 → 提取识别文本
    ↓
-发送至阿里 Qwen LLM
+根据关键词执行相应操作（开灯、关灯、播放音乐等）
+   ↓
+将识别文本转换为语音并播放
+```
+
+### 语音聊天流程（按钮触发）
+```
+按下按钮 → GPIO 中断
+   ↓
+采集音频（16kHz, 16-bit PCM）
+   ↓
+发送至百度 STT API（分块上传）
+   ↓
+解析 JSON 响应 → 提取识别文本
+   ↓
+发送至阿里通义千问 LLM
    ↓
 生成回复文本
    ↓
 发送至百度 TTS API → 获取 MP3 字节流
    ↓
-播放 TTS 音频（自动样本率恢复至 16kHz）
+播放 TTS 音频
 ```
 
 ### 音乐播放 + TTS 中断
 ```
 音乐流播放中（44.1kHz）
    ↓
-接收 BLE 命令（如 status1）
+接收蓝牙命令（如 status1）
    ↓
 暂停音乐 → 音乐流保持连接
    ↓
@@ -259,15 +305,14 @@ ESP32_practice_compitition/
 ├── platformio.ini                # PlatformIO 构建配置
 ├── README.md                     # 本文档
 ├── src/
-│   ├── main.cpp                  # 应用主程序（307 行）
+│   ├── main.cpp                  # 应用主程序
 │   ├── my_inmp441_max98357.h     # I2S 驱动初始化（麦克风/扬声器）
 │   ├── my_stt.h                  # 百度语音识别 API 包装
 │   ├── my_tts.h                  # 百度语音合成 API 包装
 │   ├── my_Qwen.h                 # 阿里通义千问 LLM 包装
 │   ├── my_wifi.h                 # WiFi 连接管理
-│   ├── my_serial.h/cpp           # STM32 UART 通信
+│   ├── my_playlist.h             # 播放列表管理
 │   ├── UrlEncode.h/cpp           # URL 编码工具
-│   └── my_serial.h               # 串口配置
 ├── include/                      # 头文件目录（保留）
 ├── lib/                          # 自定义库目录
 └── test/                         # 单元测试（可选）
@@ -284,7 +329,7 @@ ESP32_practice_compitition/
 | 百度 STT API | ~1-2s | 语音识别处理 |
 | 通义千问 LLM | ~0.5-1.5s | 文本生成 |
 | 百度 TTS API | ~2-3s | MP3 合成 |
-| **总端到端** | **~8-12s** | 从按钮到播放回复 |
+| **总端到端** | **~7-10s** | 从按钮到播放回复 |
 
 ### 内存
 | 资源 | 使用情况 | 说明 |
@@ -292,12 +337,10 @@ ESP32_practice_compitition/
 | 堆内存（SRAM） | ~50-100 KB | 动态分配，API 缓冲 |
 | PSRAM | ~2-4 MB | I2S DMA、MP3 流缓冲 |
 | SPIFFS 分区 | ~2-4 MB | 临时音频文件存储 |
-| 栈深度 | ~40 KB | FreeRTOS 栈 + 回调 |
 
 **关键优化**:
-- I2S DMA 缓冲减小至 4×64KB（从 8×128KB）→ 释放 ~512 KB SRAM
 - PSRAM 启用后 HTTPS API 调用不再因内存溢出而失败
-- BLE 初始化放在所有其他模块之后 → 最大化可用堆
+- 使用中断驱动的按键处理提高响应性
 
 ### 限制
 ⚠️ **音乐恢复不精确**: 暂停音乐后重新连接服务器，从当前时间位置恢复播放（非字节精确）  
@@ -326,21 +369,12 @@ board_build.psram = true
 board_build.arduino.memory_type = qio_opi
 ```
 
-### 3. BLE 连接失败
-**原因**: 蓝牙栈资源不足（通常是 I2S DMA 缓冲过大）  
-**解决**:  
-编辑 `src/my_inmp441_max98357.h`:
-```cpp
-.dma_buf_count = 4,      // 减小至 4
-.dma_buf_len = 64        // 改为 64
-```
-
-### 4. TTS 播放速度过快
+### 3. TTS 播放速度过快
 **原因**: 音乐播放改变了 I2S 样本率，未复原  
 **解决**:  
 `src/main.cpp` 中的所有 TTS 调用前已加入样本率恢复（无需手动修改）
 
-### 5. WiFi 连接超时或 HTTPS 证书错误
+### 4. WiFi 连接超时或 HTTPS 证书错误
 **原因**: 网络不稳定或 CA 证书过期  
 **解决**:
 ```cpp
@@ -348,7 +382,7 @@ board_build.arduino.memory_type = qio_opi
 http.setCACert(BAIDU_CERT);  // 使用最新证书链
 ```
 
-### 6. 百度 Token 过期
+### 5. 百度 Token 过期
 **原因**: 访问令牌默认 30 天有效期  
 **解决**:  
 系统自动刷新；如仍失败，在百度控制台检查 API Key 是否有效
@@ -403,6 +437,3 @@ http.setCACert(BAIDU_CERT);  // 使用最新证书链
 - **阿里 DashScope**: https://dashscope.aliyuncs.com/doc/ （通义千问 API）
 - **ESP32-S3 官方文档**: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/
 - **PlatformIO 文档**: https://docs.platformio.org/
-
----
-
