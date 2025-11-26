@@ -11,10 +11,15 @@
 #include "my_Qwen.h" // 通义千问
 #include "Audio.h"
 #include "my_playlist.h"
-// LED1 引脚定义
-#define LED1 9
+#define LED1 9  // LED1 引脚定义
+#define LED2 15 // LED2 引脚定义
 #define LOG(msg) Serial.printf("[%5lu ms] %s\n", millis(), msg)
 #define LOG_F(format, ...) Serial.printf("[%5lu ms] " format, millis(), ##__VA_ARGS__)
+
+// ADC配置
+#define ADC_PIN 8 // 可以使用的ADC引脚之一 (注意：ESP32的某些引脚只能用作输入)
+#define ADC_CHANNEL ADC1_CHANNEL_7
+
 // 定义按键引脚
 const int BUTTON_PIN = 3;   // 3号引脚作为按键控制语音输入
 const int BUTTON_PIN_2 = 7; // 7号引脚作为语音聊天
@@ -46,6 +51,8 @@ volatile long pulseCount = 0;
 // 开始时间
 unsigned long startTime = 0;
 // 中断服务函数，用于计数脉冲
+unsigned long lastSampleTime = 0;
+long lastPulseCount = 0;
 void pulseCounter()
 {
     pulseCount++;
@@ -225,7 +232,50 @@ void handleVoiceChat()
         Serial.println("No audio data captured");
     button2Pressed = false;
 }
+// 添加安全的TTS播放函数
+void playTTSVoice(String audioData, int audioLen)
+{
+    // 确保I2S处于可配置状态
+    i2s_stop(I2S_NUM_0);
+    delay(10);
 
+    // 设置TTS采样率
+    i2s_set_sample_rates(I2S_NUM_0, 16000);
+    delay(10);
+
+    // 清除DMA缓冲区
+    i2s_zero_dma_buffer(I2S_NUM_0);
+
+    // 启动I2S
+    i2s_start(I2S_NUM_0);
+    delay(10);
+
+    // 播放语音数据
+    size_t bytes_written = 0;
+    esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
+
+    // 计算播放时间并等待完成
+    uint32_t playbackMs = (audioLen * 1000) / (16000UL * 2UL);
+    delay(playbackMs + 20);
+}
+
+// 添加获取状态消息的辅助函数
+String getStatusMessage(int status)
+{
+    switch (status)
+    {
+    case 1:
+        return "您已超速请减速慢行";
+    case 2:
+        return "请注意转弯";
+    case 3:
+        return "请注意倒车";
+    case 4:
+        return "电池电量低";
+    default:
+        return "";
+    }
+}
 // BLEServer *pServer = NULL;
 // BLECharacteristic * pTxCharacteristic;
 // bool deviceConnected = false;
@@ -276,124 +326,9 @@ void handleBluetoothCommand(int command)
     Serial.printf("Handling Bluetooth command: %d, Free heap: %d\n", command, ESP.getFreeHeap());
     switch (command)
     {
-
     case 1:
-    {
-        bool wasPlaying = (isplaying == 1);
-
-        // 优先使用库的 pauseResume 切换暂停（无缝）
-        if (wasPlaying)
-        {
-            audio.pauseResume(); // 暂停流媒体（若库实现了）
-            isplaying = 0;
-        }
-
-        int audioLen = 0;
-        String audioData = sendToTTSWithConfig("您已超速请减速慢行", &audioLen, currentTtsConfig);
-        audio.setVolume(15);
-        if (audioLen > 0)
-        {
-            // 播放 TTS（保持你已有的 I2S 恢复/播放逻辑）
-            i2s_stop(I2S_NUM_0);
-            delay(10);
-            i2s_set_sample_rates(I2S_NUM_0, 16000);
-            i2s_zero_dma_buffer(I2S_NUM_0);
-            i2s_start(I2S_NUM_0);
-            delay(10);
-
-            size_t bytes_written = 0;
-            esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
-            uint32_t playbackMs = (audioLen * 1000) / (16000UL * 2UL);
-            delay(playbackMs + 20);
-        }
-
-        // 恢复播放（如果使用 pauseResume）
-        if (wasPlaying)
-        {
-            i2s_stop(I2S_NUM_0);
-            delay(10);
-            i2s_set_sample_rates(I2S_NUM_0, 44100); // 音乐通常是 44.1kHz
-            delay(10);
-            audio.pauseResume(); // 再次调用恢复
-            isplaying = 1;
-        }
-    }
-    break;
     case 2:
-    {
-
-        bool wasPlaying = (isplaying == 1);
-
-        // 优先使用库的 pauseResume 切换暂停（无缝）
-        if (wasPlaying)
-        {
-            audio.pauseResume(); // 暂停流媒体（若库实现了）
-            isplaying = 0;
-        }
-        int audioLen = 0;
-        String audioData = sendToTTSWithConfig("请注意转弯", &audioLen, currentTtsConfig);
-        if (audioLen > 0)
-        {
-            // 播放 TTS 前：停止 I2S 并恢复为 16kHz
-            i2s_stop(I2S_NUM_0);
-            delay(10);
-            i2s_set_sample_rates(I2S_NUM_0, 16000);
-            delay(10);
-
-            size_t bytes_written = 0;
-            esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
-            uint32_t playbackMs = (audioLen * 1000) / (16000UL * 2UL);
-            delay(playbackMs + 20);
-        }
-        if (wasPlaying)
-        {
-            i2s_stop(I2S_NUM_0);
-            delay(10);
-            i2s_set_sample_rates(I2S_NUM_0, 44100); // 音乐通常是 44.1kHz
-            delay(10);
-            audio.pauseResume(); // 再次调用恢复
-            isplaying = 1;
-        }
-    }
-    break;
     case 3:
-    {
-        // 停止音乐播放
-        bool wasPlaying = (isplaying == 1);
-
-        // 优先使用库的 pauseResume 切换暂停（无缝）
-        if (wasPlaying)
-        {
-            audio.pauseResume(); // 暂停流媒体（若库实现了）
-            isplaying = 0;
-        }
-
-        int audioLen = 0;
-        String audioData = sendToTTSWithConfig("请注意倒车", &audioLen, currentTtsConfig);
-        if (audioLen > 0)
-        {
-            // 播放 TTS 前：停止 I2S 并恢复为 16kHz
-            i2s_stop(I2S_NUM_0);
-            delay(10);
-            i2s_set_sample_rates(I2S_NUM_0, 16000);
-            delay(10);
-
-            size_t bytes_written = 0;
-            esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
-            uint32_t playbackMs = (audioLen * 1000) / (16000UL * 2UL);
-            delay(playbackMs + 20);
-        }
-        if (wasPlaying)
-        {
-            i2s_stop(I2S_NUM_0);
-            delay(10);
-            i2s_set_sample_rates(I2S_NUM_0, 44100); // 音乐通常是 44.1kHz
-            delay(10);
-            audio.pauseResume(); // 再次调用恢复
-            isplaying = 1;
-        }
-    }
-    break;
     case 4:
     {
         bool wasPlaying = (isplaying == 1);
@@ -401,32 +336,23 @@ void handleBluetoothCommand(int command)
         // 优先使用库的 pauseResume 切换暂停（无缝）
         if (wasPlaying)
         {
-            audio.pauseResume(); //
+            audio.pauseResume(); // 暂停流媒体（若库实现了）
             isplaying = 0;
         }
 
+        // 使用更安全的TTS播放方式
         int audioLen = 0;
-        String audioData = sendToTTSWithConfig("电池电量低", &audioLen, currentTtsConfig);
+        String audioData = sendToTTSWithConfig(getStatusMessage(command), &audioLen, currentTtsConfig);
+
         if (audioLen > 0)
         {
-            // 播放 TTS 前：停止 I2S 并恢复为 16kHz
-            i2s_stop(I2S_NUM_0);
-            delay(10);
-            i2s_set_sample_rates(I2S_NUM_0, 16000);
-            delay(10);
-
-            size_t bytes_written = 0;
-            esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
-            uint32_t playbackMs = (audioLen * 1000) / (16000UL * 2UL);
-            delay(playbackMs + 20);
+            playTTSVoice(audioData, audioLen);
         }
+
+        // 恢复播放状态
         if (wasPlaying)
         {
-            i2s_stop(I2S_NUM_0);
-            delay(10);
-            i2s_set_sample_rates(I2S_NUM_0, 44100); // 音乐通常是 44.1kHz
-            delay(10);
-            audio.pauseResume(); // 再次调用恢复
+            audio.pauseResume(); // 恢复播放
             isplaying = 1;
         }
     }
@@ -483,7 +409,6 @@ void handleBluetoothCommand(int command)
         currentStreamIndex = (currentStreamIndex + 1) % streamCount;
 
         // 播放下一个音频流
-
         audio.connecttohost(streamUrls[currentStreamIndex]);
         isplaying = 1;
 
@@ -499,7 +424,6 @@ void handleBluetoothCommand(int command)
         currentStreamIndex = (currentStreamIndex - 1 + streamCount) % streamCount;
 
         // 播放上一个音频流
-
         audio.connecttohost(streamUrls[currentStreamIndex]);
         isplaying = 1;
 
@@ -515,6 +439,7 @@ void handleBluetoothCommand(int command)
         break;
     }
 }
+
 void setup()
 {
     // 电脑串口
@@ -531,7 +456,8 @@ void setup()
     // 设置 LED 引脚为输出
     pinMode(LED1, OUTPUT);
     digitalWrite(LED1, LOW);
-
+    pinMode(LED2, OUTPUT);
+    digitalWrite(LED2, LOW);
     inmp441_setup();
     // max98357_setup();
 
@@ -643,7 +569,6 @@ void loop()
             bluetoothCommand = 11;
         }
         // 处理播放列表命令
-        // ...existing code...
         else if (receivedData.startsWith("ADDURL:"))
         {
             String url = receivedData.substring(7); // 去掉 "ADDURL:"
@@ -778,20 +703,24 @@ void loop()
         }
         Serial2.printf("Received: %s \r\n", receivedData);
     }
-    if (millis() - startTime >= 100)
-    {                                       // 每秒统计一次
-        float frequency = pulseCount / 0.1; // 计算频率
-                                            // Serial.println("Frequency: " + String(frequency) + " Hz");
-        pulseCount = 0;
-        startTime = millis();
-        if (frequency >= value * 1000 && mode == 0 && frequency <= 52000)
+    unsigned long currentTime = millis();
+    if (currentTime - lastSampleTime >= 100)
+    {                   // 每100ms采样一次
+        noInterrupts(); // 临时禁用中断确保数据一致性
+        long currentPulseCount = pulseCount;
+        interrupts(); // 重新启用中断
+
+        float frequency = (currentPulseCount - lastPulseCount) * 10; // 转换为Hz
+        lastPulseCount = currentPulseCount;
+        lastSampleTime = currentTime;
+        // Serial.printf("Frequency: %.2f Hz\r\n", frequency);
+        if (frequency >= value * 1000 && mode == 0 && frequency <= 51000)
         {
             bluetoothCommand = 1; // 超速
             mode = 1;
         }
         if (frequency <= value * 1000 - 1000 && mode == 1)
         {
-
             mode = 0;
         }
     }
@@ -802,7 +731,18 @@ void loop()
         bluetoothCommand = 0; // 重置命令
     }
     // 检测按键按下以启动语音识别
-
+    // int adcValue = analogRead(ADC_PIN);        // 读取ADC值 (0-4095 对应 12位)
+    // float voltage = adcValue * (3.3 / 4095.0); // 转换为电压值 (假设供电电压为3.3V)
+    // if (voltage > 2.5)                         // 音量传感器的阈值
+    // {
+    //     digitalWrite(LED2, HIGH);
+    //     // LOG_F("Volume: %.2fV", voltage);
+    //     // audio.setVolume(map(voltage, 2.5, 3.3, 0, 21)); // 映射到0-21的范围
+    // }
+    // else
+    // {
+    //     digitalWrite(LED2, LOW);
+    // }
     if (button1Pressed)
     {
         button1Pressed = false;

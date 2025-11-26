@@ -25,7 +25,7 @@ typedef struct
   int vol; // 音量
 } TTSConfig;
 
-TTSConfig currentTtsConfig = {0, 5, 5, 5};
+TTSConfig currentTtsConfig = {3, 1, 3, 5};
 extern TTSConfig currentTtsConfig;
 
 String tts_gainToken()
