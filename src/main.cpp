@@ -11,6 +11,8 @@
 #include "my_Qwen.h" // 通义千问
 #include "Audio.h"
 #include "my_playlist.h"
+#include "my_wifi_audio.h" // 添加WiFi音频头文件
+
 #define LED1 9 // LED1 引脚定义
 
 #define LED2 15   // LED2 引脚定义
@@ -231,7 +233,7 @@ void handleVoiceChat()
                     delay(10);
                     size_t bytes_written = 0;
                     esp_err_t writeResult = i2s_write(I2S_NUM_0, audioData.c_str(), audioLen, &bytes_written, portMAX_DELAY);
-                    uint32_t playbackMs = (audioLen * 1000) / (16000 * 2);
+                    uint32_t playbackMs = (audioLen * 1000) / (16000UL * 2UL);
                     delay(playbackMs + 10);
                     Serial2.println("TTS playback completed");
                     if (wasPlaying)
@@ -470,7 +472,15 @@ void handleBluetoothCommand(int command)
     {
         audio.pauseResume(); // 暂停
     }
-    break;
+    // 添加WiFi音频命令处理
+    case 24: // START_AUDIO_TX
+    case 25: // STOP_AUDIO_TX
+    case 26: // START_AUDIO_RX
+    case 27: // STOP_AUDIO_RX
+    case 28: // START_BOTH
+    case 29: // STOP_BOTH
+        wifiAudio.handleWifiAudioCommand(command);
+        break;
     default:
         break;
     }
@@ -509,6 +519,9 @@ void setup()
     wifi_setup();
     stt_token = stt_gainToken();
     tts_token = tts_gainToken();
+    
+    // 初始化WiFi音频功能
+    wifiAudio.init();
 
     Serial2.println("setup complete");
     Serial2.println("Press button to start voice recognition...");
@@ -543,6 +556,10 @@ void loop()
     {
         audio.loop();
     }
+    
+    // 处理WiFi音频
+    wifiAudio.loop();
+    
     // 处理来自蓝牙的串口通信
     if (Serial2.available() > 0)
     {
@@ -603,6 +620,31 @@ void loop()
         else if (receivedData == "pause/resume")
         {
             bluetoothCommand = 11;
+        }
+        // 添加WiFi音频控制命令
+        else if (receivedData == "start_tx")
+        {
+            bluetoothCommand = 24; // START_AUDIO_TX
+        }
+        else if (receivedData == "stop_tx")
+        {
+            bluetoothCommand = 25; // STOP_AUDIO_TX
+        }
+        else if (receivedData == "start_rx")
+        {
+            bluetoothCommand = 26; // START_AUDIO_RX
+        }
+        else if (receivedData == "stop_rx")
+        {
+            bluetoothCommand = 27; // STOP_AUDIO_RX
+        }
+        else if (receivedData == "start_both")
+        {
+            bluetoothCommand = 28; // START_BOTH
+        }
+        else if (receivedData == "stop_both")
+        {
+            bluetoothCommand = 29; // STOP_BOTH
         }
         // 处理播放列表命令
         else if (receivedData.startsWith("ADDURL:"))
