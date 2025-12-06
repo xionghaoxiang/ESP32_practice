@@ -11,8 +11,11 @@
 #include "my_Qwen.h" // 通义千问
 #include "Audio.h"
 #include "my_playlist.h"
-#define LED1 9  // LED1 引脚定义
-#define LED2 15 // LED2 引脚定义
+#define LED1 9 // LED1 引脚定义
+
+#define LED2 15   // LED2 引脚定义
+#define ADC_PIN 8 // 可以使用的ADC引脚之一 (注意：ESP32的某些引脚只能用作输入)
+#define ADC_CHANNEL ADC1_CHANNEL_7
 #define LOG(msg) Serial.printf("[%5lu ms] %s\n", millis(), msg)
 #define LOG_F(format, ...) Serial.printf("[%5lu ms] " format, millis(), ##__VA_ARGS__)
 
@@ -29,6 +32,7 @@ Audio audio;
 int value = 40;
 int mode = 0;
 PlaylistManager playlist;
+int noise_event = 0;
 const char *streamUrls[] = {
     "http://music.163.com/song/media/outer/url?id=431551064.mp3",
     "http://music.163.com/song/media/outer/url?id=2692390309.mp3",
@@ -46,7 +50,7 @@ int isplaying = 0;
 volatile int bluetoothCommand = 0;
 volatile bool button1Pressed = false;
 volatile bool button2Pressed = false;
-const int inputPin = 10;
+const int inputPin = 10; // 测频率输入引脚
 volatile long pulseCount = 0;
 // 开始时间
 unsigned long startTime = 0;
@@ -89,10 +93,12 @@ void handleVoiceRecognition()
             if (recognizedText.indexOf("开灯") != -1)
             {
                 digitalWrite(LED1, HIGH);
+                recognizedText = "已开启LED灯";
             }
             else if (recognizedText.indexOf("关灯") != -1)
             {
                 digitalWrite(LED1, LOW);
+                recognizedText = "已关闭LED灯";
             }
             else if (recognizedText.indexOf("播放音乐") != -1)
             {
@@ -117,6 +123,22 @@ void handleVoiceRecognition()
             else if (recognizedText.indexOf("音量减小") != -1)
             {
                 bluetoothCommand = 8;
+            }
+            else if (recognizedText.indexOf("音量调到最大") != -1)
+            {
+                audio.setVolume(21);
+                currentTtsConfig.vol = 9; // 设置TTS音量为最大
+                recognizedText = "已调到最大音量";
+            }
+            else if (recognizedText.indexOf("音量调到最小") != -1)
+            {
+                audio.setVolume(3);
+                currentTtsConfig.vol = 3; // 设置TTS音量为最小
+                recognizedText = "已调到最小音量";
+            }
+            else if (recognizedText.indexOf("开始导航") != -1)
+            {
+                recognizedText = "正在为你导航，请注意路况";
             }
             bool wasPlaying = (isplaying == 1);
 
@@ -272,6 +294,10 @@ String getStatusMessage(int status)
         return "请注意倒车";
     case 4:
         return "电池电量低";
+    case 12:
+        return "电池已充满请及时断开电源";
+    case 13:
+        return "当前环境噪音大请注意安全";
     default:
         return "";
     }
@@ -327,10 +353,16 @@ void handleBluetoothCommand(int command)
     switch (command)
     {
     case 1:
+        currentTtsConfig.vol = 5;
+        audio.setVolume(12);
     case 2:
     case 3:
     case 4:
+    case 12:
+    case 13:
+
     {
+        digitalWrite(LED2, HIGH);
         bool wasPlaying = (isplaying == 1);
 
         // 优先使用库的 pauseResume 切换暂停（无缝）
@@ -348,7 +380,11 @@ void handleBluetoothCommand(int command)
         {
             playTTSVoice(audioData, audioLen);
         }
-
+        digitalWrite(LED2, LOW);
+        i2s_stop(I2S_NUM_0);
+        delay(10);
+        i2s_set_sample_rates(I2S_NUM_0, 44100); // 音乐通常是 44.1kHz
+        delay(10);
         // 恢复播放状态
         if (wasPlaying)
         {
@@ -460,9 +496,9 @@ void setup()
     digitalWrite(LED2, LOW);
     inmp441_setup();
     // max98357_setup();
-
+    analogReadResolution(12);
     audio.setPinout(17, 18, 16);
-    audio.setVolume(10);
+    audio.setVolume(15);
     // 初始化按键引脚
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     pinMode(BUTTON_PIN_2, INPUT_PULLUP);
@@ -701,6 +737,14 @@ void loop()
         {
             bluetoothCommand = 4;
         }
+        else if (receivedData == "status5")
+        {
+            bluetoothCommand = 12;
+        }
+        else if (receivedData == "status6")
+        {
+            bluetoothCommand = 13;
+        }
         Serial2.printf("Received: %s \r\n", receivedData);
     }
     unsigned long currentTime = millis();
@@ -725,11 +769,7 @@ void loop()
         }
     }
     // 处理蓝牙命令
-    if (bluetoothCommand != 0)
-    {
-        handleBluetoothCommand(bluetoothCommand);
-        bluetoothCommand = 0; // 重置命令
-    }
+
     // 检测按键按下以启动语音识别
     // int adcValue = analogRead(ADC_PIN);        // 读取ADC值 (0-4095 对应 12位)
     // float voltage = adcValue * (3.3 / 4095.0); // 转换为电压值 (假设供电电压为3.3V)
@@ -755,5 +795,22 @@ void loop()
         button2Pressed = false;
         // 执行语音聊天逻辑
         handleVoiceChat();
+    }
+    int adcValue = analogRead(ADC_PIN);        // 读取ADC值 (0-4095 对应 12位)
+    float voltage = adcValue * (3.3 / 4095.0); // 转换为电压值 (假设供电电压为3.3V)
+    if (voltage >= 1.9 && noise_event == 0)    // 音量传感器的阈值
+    {
+        bluetoothCommand = 13;
+        Serial2.printf("Volume: %.2fV", voltage);
+        noise_event = 1;
+    }
+    else if (voltage <= 0.5 && noise_event == 1)
+    {
+        noise_event = 0;
+    }
+    if (bluetoothCommand != 0)
+    {
+        handleBluetoothCommand(bluetoothCommand);
+        bluetoothCommand = 0; // 重置命令
     }
 }
