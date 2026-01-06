@@ -117,20 +117,10 @@ void WifiAudio::webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, siz
     case WStype_BIN:
         // 接收音频数据
         // 添加更严格的检查，防止缓冲区溢出
-        if (is_receiving_audio && audio_rx_buffer != nullptr && length <= buffer_size)
+        if (is_receiving_audio && length > 0)
         {
-            // 使用临界区保护内存拷贝操作
-            portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
-            portENTER_CRITICAL(&mux);
-            memcpy(audio_rx_buffer, payload, length);
-            portEXIT_CRITICAL(&mux);
-
-            playReceivedAudio(audio_rx_buffer, length);
-        }
-        else
-        {
-            Serial.printf("Discarded binary data: receiving=%d, buffer=%p, length=%d, buffer_size=%d\n",
-                          is_receiving_audio, audio_rx_buffer, length, buffer_size);
+            // 直接使用 payload 播放，避免不必要的拷贝
+            playReceivedAudio(payload, length);
         }
         break;
 
@@ -221,19 +211,13 @@ void WifiAudio::handleWifiAudioCommand(int command)
     switch (command)
     {
     case 24: // 启动音频传输（麦克风到客户端）
-        i2s_stop(I2S_NUM_0);
-        delay(10);
-        i2s_set_sample_rates(I2S_NUM_0, 44100);
-        delay(10);
+
         startAudioTransmission();
         break;
 
     case 25: // 停止音频传输
         stopAudioTransmission();
-        i2s_stop(I2S_NUM_0);
-        delay(10);
-        i2s_set_sample_rates(I2S_NUM_0, 16000);
-        delay(10);
+
         break;
 
     case 26: // 启动音频接收（客户端到扬声器）
@@ -270,7 +254,6 @@ void WifiAudio::loop()
 void WifiAudio::audioTransmissionTask(void *parameter)
 {
     WifiAudio *instance = (WifiAudio *)parameter;
-    unsigned long last_yield_time = millis();
 
     while (instance->is_sending_audio)
     {
@@ -288,44 +271,19 @@ void WifiAudio::audioTransmissionTask(void *parameter)
             instance->audio_tx_buffer,
             instance->buffer_size,
             &bytes_read,
-            20 / portTICK_PERIOD_MS); // 增加超时时间
+            portMAX_DELAY); // 使用阻塞读取，确保获取完整数据
 
         if (result == ESP_OK && bytes_read > 0 && instance->is_client_connected)
         {
-            // 为了避免pbuf_free断言失败，我们分批发送数据
-            // 将大数据块拆分为较小的块进行发送
-            const size_t max_chunk_size = 512; // 增加块大小以减少发送次数
-            size_t sent_bytes = 0;
+            // 一次性发送整个数据块，减少网络开销
+            instance->webSocketServer.sendBIN(
+                instance->client_id,
+                instance->audio_tx_buffer,
+                bytes_read);
 
-            while (sent_bytes < bytes_read && instance->is_client_connected)
-            {
-                size_t chunk_size = min(max_chunk_size, bytes_read - sent_bytes);
-                // 在每次发送前检查客户端连接状态
-                if (!instance->is_client_connected)
-                    break;
-
-                // 添加短暂延迟以减轻网络压力
-                delay(1);
-                instance->webSocketServer.sendBIN(
-                    instance->client_id,
-                    instance->audio_tx_buffer + sent_bytes,
-                    chunk_size);
-                sent_bytes += chunk_size;
-
-                // 在每次发送后短暂延迟
-                delay(1);
-            }
+            // 只在发送后短暂让出 CPU
+            taskYIELD();
         }
-
-        // 定期让出CPU时间给其他任务，特别是WiFi任务
-        if ((millis() - last_yield_time) > 5)
-        {
-            yield();
-            last_yield_time = millis();
-        }
-
-        // 添加额外的延迟以避免过度占用CPU
-        delay(1);
     }
 
     // 清理任务句柄
@@ -336,20 +294,16 @@ void WifiAudio::audioTransmissionTask(void *parameter)
 // 播放接收到的音频
 void WifiAudio::playReceivedAudio(uint8_t *audio_data, size_t length)
 {
-    int16_t *in = (int16_t *)audio_data;
-    size_t samples = length / 2;
+    if (length == 0)
+        return;
 
-    static int16_t stereo_buffer[4096]; // enough space
+    size_t bytes_written = 0;
 
-    for (size_t i = 0; i < samples; i++)
+    // 写入 I2S，使用适当的超时时间
+    esp_err_t result = i2s_write(I2S_NUM_0, audio_data, length, &bytes_written, 100 / portTICK_PERIOD_MS);
+
+    if (result != ESP_OK)
     {
-        int16_t s = in[i];
-        stereo_buffer[i * 2] = s;     // Left
-        stereo_buffer[i * 2 + 1] = s; // Right
+        Serial.printf("I2S write error: %d\n", result);
     }
-
-    size_t bytes_to_write = samples * 4;
-
-    size_t bytes_written;
-    i2s_write(I2S_NUM_0, stereo_buffer, bytes_to_write, &bytes_written, portMAX_DELAY);
 }

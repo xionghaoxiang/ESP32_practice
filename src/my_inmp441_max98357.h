@@ -20,7 +20,7 @@ i2s_config_t inmp441_i2s_config = {
     .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_STAND_I2S),
     .intr_alloc_flags = ESP_INTR_FLAG_EDGE,
     .dma_buf_count = 16, // buffer 的数量
-    .dma_buf_len = 256   // buffer的大小，单位是i2s_bits_per_sample_t 采样位数，越小播放需要越及时时延越小，否则相反
+    .dma_buf_len = 256  // buffer的大小，单位是i2s_bits_per_sample_t 采样位数，越小播放需要越及时时延越小，否则相反
 };
 
 const i2s_pin_config_t inmp441_gpio_config = {

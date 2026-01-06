@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>手机兼容 WiFi 音频客户端</title>
+  <style>
+    body {
+      font-family: system-ui, Segoe UI, Roboto, Arial;
+      max-width: 720px;
+      margin: 18px auto;
+      padding: 12px;
+    }
+
+    input,
+    button {
+      font-size: 16px;
+      padding: 8px;
+      margin: 4px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    pre {
+      background: #f6f6f6;
+      padding: 8px;
+      border-radius: 6px;
+      overflow: auto;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>手机兼容 WiFi 音频客户端（WebSocket / PCM）</h2>
+  <div>
+    <label>ESP32 主机/IP: <input id="host" placeholder="192.168.1.100" /></label>
+    <div class="row">
+      <button id="btnConnect">连接</button>
+      <button id="btnDisconnect" disabled>断开</button>
+      <button id="btnStartTx" disabled>开始发送（TX）</button>
+      <button id="btnStopTx" disabled>停止发送</button>
+      <button id="btnStartRx" disabled>开始接收（RX）</button>
+      <button id="btnStopRx" disabled>停止接收</button>
+      <button id="btnStartBoth" disabled>双向</button>
+      <button id="btnStopBoth" disabled>停止所有</button>
+    </div>
+  </div>
+
+  <h4>状态</h4>
+  <pre id="log">就绪。</pre>
+
+  <script>
+    const RATE = 16000;
+    const CHANNELS = 1;
+    let ws = null;
+    let audioContext = null;
+    let micStream = null;
+    let txEnabled = false;
+    let rxEnabled = false;
+    let recvQueue = [];
+    let logEl = document.getElementById('log');
+
+    function log(s) {
+      console.log(s);
+      logEl.textContent += '\n' + s;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // Float32 -> Int16
+    function toInt16Buffer(float32Array) {
+      const l = float32Array.length;
+      const buffer = new ArrayBuffer(l * 2);
+      const view = new DataView(buffer);
+      for (let i = 0; i < l; i++) {
+        let s = Math.max(-1, Math.min(1, float32Array[i]));
+        view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+      return buffer;
+    }
+
+    // Int16 -> Float32
+    function int16ToFloat32(int16Array) {
+      const l = int16Array.length;
+      const out = new Float32Array(l);
+      for (let i = 0; i < l; i++) {
+        out[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7FFF);
+      }
+      return out;
+    }
+
+    // AudioBuffer 播放 PCM
+    function playPCM(f32Array) {
+      if (!audioContext) return;
+      const buffer = audioContext.createBuffer(1, f32Array.length, RATE);
+      buffer.getChannelData(0).set(f32Array);
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContext.destination);
+      source.start();
+    }
+
+    // 定时播放队列
+    function schedulePlayback() {
+      if (!audioContext || !rxEnabled) return;
+      if (recvQueue.length > 0) {
+        playPCM(recvQueue.shift());
+      }
+      setTimeout(schedulePlayback, 10);
+    }
+
+    // WebSocket 连接
+    function connect(host) {
+      if (ws) ws.close();
+      let scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+      let url = `${scheme}://${host}:81/`;
+      log('尝试连接: ' + url);
+      ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => { log('WebSocket 已打开'); setButtonsConnected(true); };
+      ws.onmessage = (evt) => {
+        if (typeof evt.data === 'string') {
+          log('收到文本消息: ' + evt.data);
+        } else {
+          if (!rxEnabled) return;
+          const int16 = new Int16Array(evt.data);
+          recvQueue.push(int16ToFloat32(int16));
+        }
+      };
+      ws.onerror = e => log('WebSocket 错误: ' + e);
+      ws.onclose = () => { log('WebSocket 已关闭'); setButtonsConnected(false); stopAll(); };
+    }
+
+    function disconnect() { if (ws) ws.close(); ws = null; }
+
+    async function ensureAudioContext() {
+      if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
+      }
+      if (audioContext.state === 'suspended') await audioContext.resume();
+    }
+
+    // 开始发送
+    async function startTx() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) { log('先连接 WebSocket'); return; }
+      if (txEnabled) return;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: RATE } });
+      } catch (err) { log('获取麦克风失败: ' + err); return; }
+      await ensureAudioContext();
+      const source = audioContext.createMediaStreamSource(micStream);
+      const processor = audioContext.createScriptProcessor(1024, 1, 0);
+      processor.onaudioprocess = e => {
+        if (!txEnabled) return;
+        const ab = toInt16Buffer(e.inputBuffer.getChannelData(0));
+        ws.send(ab);
+      };
+      source.connect(processor);
+      txEnabled = true;
+      ws.send('START_AUDIO_RX');
+      log('开始发送（TX）');
+    }
+
+    // 停止发送
+    function stopTx() {
+      if (!txEnabled) return;
+      txEnabled = false;
+      if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+      try { ws.send('STOP_AUDIO_TX'); } catch (e) { }
+      log('停止发送（TX）');
+      setButtonsTx(false);
+    }
+
+    // 开始接收
+    async function startRx() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) { log('先连接 WebSocket'); return; }
+      if (rxEnabled) return;
+      await ensureAudioContext();
+      rxEnabled = true;
+      try { ws.send('START_AUDIO_RX'); } catch (e) { }
+      log('开始接收（RX）');
+      setButtonsRx(true);
+      schedulePlayback();
+    }
+
+    // 停止接收
+    function stopRx() {
+      if (!rxEnabled) return;
+      rxEnabled = false;
+      try { ws.send('STOP_AUDIO_RX'); } catch (e) { }
+      recvQueue = [];
+      log('停止接收（RX）');
+      setButtonsRx(false);
+    }
+
+    function startBoth() { startTx(); startRx(); document.getElementById('btnStopBoth').disabled = false; }
+    function stopAll() { stopTx(); stopRx(); disconnect(); document.getElementById('btnStopBoth').disabled = true; }
+
+    function setButtonsConnected(connected) {
+      document.getElementById('btnConnect').disabled = connected;
+      document.getElementById('btnDisconnect').disabled = !connected;
+      document.getElementById('btnStartTx').disabled = !connected;
+      document.getElementById('btnStartRx').disabled = !connected;
+      document.getElementById('btnStartBoth').disabled = !connected;
+      document.getElementById('btnStopTx').disabled = !connected;
+      document.getElementById('btnStopRx').disabled = !connected;
+      document.getElementById('btnStopBoth').disabled = !connected;
+    }
+
+    function setButtonsTx(on) { document.getElementById('btnStartTx').disabled = on; document.getElementById('btnStopTx').disabled = !on; }
+    function setButtonsRx(on) { document.getElementById('btnStartRx').disabled = on; document.getElementById('btnStopRx').disabled = !on; }
+
+    document.getElementById('btnConnect').addEventListener('click', () => {
+      const host = document.getElementById('host').value.trim();
+      if (!host) { alert('请输入 ESP32 的 IP 或主机名'); return; }
+      connect(host);
+    });
+    document.getElementById('btnDisconnect').addEventListener('click', () => disconnect());
+    document.getElementById('btnStartTx').addEventListener('click', () => startTx());
+    document.getElementById('btnStopTx').addEventListener('click', () => stopTx());
+    document.getElementById('btnStartRx').addEventListener('click', () => startRx());
+    document.getElementById('btnStopRx').addEventListener('click', () => stopRx());
+    document.getElementById('btnStartBoth').addEventListener('click', () => startBoth());
+    document.getElementById('btnStopBoth').addEventListener('click', () => stopAll());
+
+    // 初始化按钮
+    setButtonsConnected(false);
+    log('页面加载完成，手机点击按钮即可使用音频功能。注意：需在 WiFi 同一局域网并允许麦克风访问。');
+  </script>
+</body>
+
+</html>
