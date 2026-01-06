@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WiFi音频客户端</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+
+        .control-group {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+
+        .control-group h2 {
+            margin-top: 0;
+            color: #555;
+        }
+
+        input,
+        button {
+            padding: 10px;
+            margin: 5px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            cursor: pointer;
+            border: none;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            background-color: #e9ecef;
+        }
+
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .log {
+            height: 200px;
+            overflow-y: scroll;
+            border: 1px solid #ccc;
+            padding: 10px;
+            background-color: #f8f9fa;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>WiFi音频客户端</h1>
+
+        <div class="control-group">
+            <h2>连接设置</h2>
+            <input type="text" id="ipAddress" placeholder="输入ESP32的IP地址，例如: 192.168.1.100">
+            <button id="connectBtn">连接</button>
+            <button id="disconnectBtn" disabled>断开连接</button>
+            <div id="connectionStatus" class="status disconnected">未连接</div>
+        </div>
+
+        <div class="control-group">
+            <h2>音频传输控制</h2>
+            <button id="startTxBtn" disabled>开始音频发送 (麦克风→ESP32)</button>
+            <button id="stopTxBtn" disabled>停止音频发送</button>
+            <br>
+            <button id="startRxBtn" disabled>开始音频接收 (ESP32→扬声器)</button>
+            <button id="stopRxBtn" disabled>停止音频接收</button>
+            <br>
+            <button id="startBothBtn" disabled>开始双向音频传输</button>
+            <button id="stopBothBtn" disabled>停止所有音频传输</button>
+        </div>
+
+        <div class="control-group">
+            <h2>系统日志</h2>
+            <div id="log" class="log"></div>
+        </div>
+    </div>
+
+    <script>
+        class WifiAudioWebClient {
+            constructor() {
+                this.ws = null;
+                this.audioContext = null;
+                this.mediaStream = null;
+                this.scriptProcessor = null;
+                this.isSending = false;
+                this.isReceiving = false;
+                this.receiveBuffer = [];
+
+                // 音频参数
+                this.sampleRate = 44100;
+                this.channels = 1;
+                this.chunkSize = 1024;
+
+                this.initializeElements();
+                this.bindEvents();
+            }
+
+            initializeElements() {
+                this.ipAddress = document.getElementById('ipAddress');
+                this.connectBtn = document.getElementById('connectBtn');
+                this.disconnectBtn = document.getElementById('disconnectBtn');
+                this.connectionStatus = document.getElementById('connectionStatus');
+                this.startTxBtn = document.getElementById('startTxBtn');
+                this.stopTxBtn = document.getElementById('stopTxBtn');
+                this.startRxBtn = document.getElementById('startRxBtn');
+                this.stopRxBtn = document.getElementById('stopRxBtn');
+                this.startBothBtn = document.getElementById('startBothBtn');
+                this.stopBothBtn = document.getElementById('stopBothBtn');
+                this.logElement = document.getElementById('log');
+            }
+
+            bindEvents() {
+                this.connectBtn.addEventListener('click', () => this.connect());
+                this.disconnectBtn.addEventListener('click', () => this.disconnect());
+                this.startTxBtn.addEventListener('click', () => this.startAudioTx());
+                this.stopTxBtn.addEventListener('click', () => this.stopAudioTx());
+                this.startRxBtn.addEventListener('click', () => this.startAudioRx());
+                this.stopRxBtn.addEventListener('click', () => this.stopAudioRx());
+                this.startBothBtn.addEventListener('click', () => {
+                    this.startAudioTx();
+                    this.startAudioRx();
+                });
+                this.stopBothBtn.addEventListener('click', () => this.stopAll());
+            }
+
+            log(message) {
+                const timestamp = new Date().toLocaleTimeString();
+                this.logElement.innerHTML += `[${timestamp}] ${message}\n`;
+                this.logElement.scrollTop = this.logElement.scrollHeight;
+                console.log(`[${timestamp}] ${message}`);
+            }
+
+            updateConnectionStatus(connected) {
+                if (connected) {
+                    this.connectionStatus.textContent = '已连接';
+                    this.connectionStatus.className = 'status connected';
+                    this.connectBtn.disabled = true;
+                    this.disconnectBtn.disabled = false;
+                    this.startTxBtn.disabled = false;
+                    this.startRxBtn.disabled = false;
+                    this.startBothBtn.disabled = false;
+                } else {
+                    this.connectionStatus.textContent = '未连接';
+                    this.connectionStatus.className = 'status disconnected';
+                    this.connectBtn.disabled = false;
+                    this.disconnectBtn.disabled = true;
+                    this.startTxBtn.disabled = true;
+                    this.stopTxBtn.disabled = true;
+                    this.startRxBtn.disabled = true;
+                    this.stopRxBtn.disabled = true;
+                    this.startBothBtn.disabled = true;
+                    this.stopBothBtn.disabled = true;
+                }
+            }
+
+            async connect() {
+                const ip = this.ipAddress.value.trim();
+                if (!ip) {
+                    this.log('请输入ESP32的IP地址');
+                    return;
+                }
+
+                try {
+                    this.log(`正在连接到 ws://${ip}:81/`);
+                    this.ws = new WebSocket(`ws://${ip}:81/`);
+
+                    this.ws.onopen = (event) => {
+                        this.log('WebSocket连接已打开');
+                        this.updateConnectionStatus(true);
+                    };
+
+                    this.ws.onmessage = (event) => {
+                        this.onMessage(event);
+                    };
+
+                    this.ws.onclose = (event) => {
+                        this.log('WebSocket连接已关闭');
+                        this.updateConnectionStatus(false);
+                        this.stopAll();
+                    };
+
+                    this.ws.onerror = (error) => {
+                        this.log(`WebSocket错误: ${error.message}`);
+                    };
+                } catch (error) {
+                    this.log(`连接错误: ${error.message}`);
+                }
+            }
+
+            disconnect() {
+                if (this.ws) {
+                    this.ws.close();
+                }
+            }
+
+            onMessage(event) {
+                if (typeof event.data === 'string') {
+                    this.log(`收到文本消息: ${event.data}`);
+                } else {
+                    // 接收到音频数据
+                    if (this.isReceiving) {
+                        this.playAudioData(event.data);
+                    }
+                }
+            }
+
+            async startAudioTx() {
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                    this.log('请先连接到服务器');
+                    return;
+                }
+
+                try {
+                    this.ws.send('START_AUDIO_TX');
+                    this.log('开始音频发送...');
+
+                    // 获取音频输入流
+                    this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+
+                    // 创建音频上下文
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: this.sampleRate
+                    });
+
+                    // 创建媒体流源
+                    const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+
+                    // 创建ScriptProcessorNode来处理音频数据
+                    this.scriptProcessor = this.audioContext.createScriptProcessor(this.chunkSize, this.channels, this.channels);
+
+                    source.connect(this.scriptProcessor);
+                    this.scriptProcessor.connect(this.audioContext.destination);
+
+                    this.scriptProcessor.onaudioprocess = (event) => {
+                        if (this.isSending && this.ws && this.ws.readyState === WebSocket.OPEN) {
+                            const inputData = event.inputBuffer.getChannelData(0);
+
+                            // 将浮点数据转换为16位整数
+                            const pcmData = this.floatTo16BitPCM(inputData);
+
+                            // 发送音频数据
+                            this.ws.send(pcmData);
+                        }
+                    };
+
+                    this.isSending = true;
+                    this.startTxBtn.disabled = true;
+                    this.stopTxBtn.disabled = false;
+                    this.stopBothBtn.disabled = false;
+
+                } catch (error) {
+                    this.log(`无法开始音频发送: ${error.message}`);
+                }
+            }
+
+            stopAudioTx() {
+                this.log('停止音频发送...');
+                this.isSending = false;
+
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    try {
+                        this.ws.send('STOP_AUDIO_TX');
+                    } catch (e) {
+                        // 忽略发送停止命令时的任何错误
+                    }
+                }
+
+                if (this.scriptProcessor) {
+                    this.scriptProcessor.disconnect();
+                    this.scriptProcessor = null;
+                }
+
+                if (this.mediaStream) {
+                    this.mediaStream.getTracks().forEach(track => track.stop());
+                    this.mediaStream = null;
+                }
+
+                if (this.audioContext) {
+                    this.audioContext.close();
+                    this.audioContext = null;
+                }
+
+                this.startTxBtn.disabled = false;
+                this.stopTxBtn.disabled = true;
+            }
+
+            async startAudioRx() {
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                    this.log('请先连接到服务器');
+                    return;
+                }
+
+                try {
+                    this.ws.send('START_AUDIO_RX');
+                    this.log('开始音频接收...');
+
+                    // 初始化音频上下文用于播放
+                    if (!this.audioContext) {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                            sampleRate: this.sampleRate
+                        });
+                    }
+
+                    this.isReceiving = true;
+                    this.startRxBtn.disabled = true;
+                    this.stopRxBtn.disabled = false;
+                    this.stopBothBtn.disabled = false;
+                } catch (error) {
+                    this.log(`无法开始音频接收: ${error.message}`);
+                }
+            }
+
+            stopAudioRx() {
+                this.log('停止音频接收...');
+                this.isReceiving = false;
+
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    try {
+                        this.ws.send('STOP_AUDIO_RX');
+                    } catch (e) {
+                        // 忽略发送停止命令时的任何错误
+                    }
+                }
+
+                this.startRxBtn.disabled = false;
+                this.stopRxBtn.disabled = true;
+            }
+
+            stopAll() {
+                this.stopAudioTx();
+                this.stopAudioRx();
+                this.stopBothBtn.disabled = true;
+            }
+
+            playAudioData(data) {
+                try {
+                    if (!this.audioContext || data.length === 0) return;
+
+                    // 将接收到的数据转换回音频
+                    const dataArray = new Int16Array(data);
+                    const floatArray = new Float32Array(dataArray.length);
+
+                    // 将16位整数转换为浮点数
+                    for (let i = 0; i < dataArray.length; i++) {
+                        floatArray[i] = dataArray[i] / 32768;
+                    }
+
+                    // 创建音频缓冲区
+                    const buffer = this.audioContext.createBuffer(this.channels, floatArray.length, this.sampleRate);
+                    buffer.getChannelData(0).set(floatArray);
+
+                    // 播放音频
+                    const source = this.audioContext.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(this.audioContext.destination);
+                    source.start();
+                } catch (error) {
+                    this.log(`播放音频时出错: ${error.message}`);
+                }
+            }
+
+            floatTo16BitPCM(input) {
+                const output = new Int16Array(input.length);
+                for (let i = 0; i < input.length; i++) {
+                    const s = Math.max(-1, Math.min(1, input[i]));
+                    output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                return output;
+            }
+        }
+
+        // 初始化客户端
+        document.addEventListener('DOMContentLoaded', () => {
+            const client = new WifiAudioWebClient();
+        });
+    </script>
+</body>
+
+</html>

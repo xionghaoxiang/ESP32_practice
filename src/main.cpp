@@ -92,6 +92,7 @@ void handleVoiceRecognition()
             stt_setup();
             stt_assembleJson();
             String recognizedText = sendToSTT(); // 直接获取识别结果
+            Serial.println("Recognized text: " + recognizedText);
             if (recognizedText.indexOf("开灯") != -1)
             {
                 digitalWrite(LED1, HIGH);
@@ -253,7 +254,10 @@ void handleVoiceChat()
         }
     }
     else
+    {
         Serial.println("No audio data captured");
+        Serial2.println("No audio data captured");
+    }
     button2Pressed = false;
 }
 // 添加安全的TTS播放函数
@@ -519,7 +523,7 @@ void setup()
     wifi_setup();
     stt_token = stt_gainToken();
     tts_token = tts_gainToken();
-    
+
     // 初始化WiFi音频功能
     wifiAudio.init();
 
@@ -556,10 +560,10 @@ void loop()
     {
         audio.loop();
     }
-    
+
     // 处理WiFi音频
     wifiAudio.loop();
-    
+
     // 处理来自蓝牙的串口通信
     if (Serial2.available() > 0)
     {
@@ -580,6 +584,14 @@ void loop()
         else if (receivedData == "status4")
         {
             bluetoothCommand = 4;
+        }
+        else if (receivedData == "status5")
+        {
+            bluetoothCommand = 12;
+        }
+        else if (receivedData == "status6")
+        {
+            bluetoothCommand = 13;
         }
         else if (receivedData == "on")
         {
@@ -804,6 +816,7 @@ void loop()
         {
             bluetoothCommand = 1; // 超速
             mode = 1;
+            Serial2.printf("Speed: %.2f Hz\r\n", frequency);
         }
         if (frequency <= value * 1000 - 1000 && mode == 1)
         {
@@ -840,7 +853,7 @@ void loop()
     }
     int adcValue = analogRead(ADC_PIN);        // 读取ADC值 (0-4095 对应 12位)
     float voltage = adcValue * (3.3 / 4095.0); // 转换为电压值 (假设供电电压为3.3V)
-    if (voltage >= 1.9 && noise_event == 0)    // 音量传感器的阈值
+    if (voltage >= 2.9 && noise_event == 0)    // 音量传感器的阈值
     {
         bluetoothCommand = 13;
         Serial2.printf("Volume: %.2fV", voltage);
